@@ -20,7 +20,7 @@ def run_ntuple_experiment(config):
     torch.manual_seed(7)
     np.random.seed(0)
 
-    loader_kargs = {'num_workers': 4, 'pin_memory': False} if 'mps' in device else {}
+    loader_kargs = {'num_workers': 4, 'pin_memory': True} if 'cuda' in device else {}
     rho_prior = math.log(math.exp(config['sigma_prior']) - 1.0)
 
     # --- 2. DATA PREPARATION ---
@@ -104,7 +104,7 @@ import time
 if __name__ == '__main__':
     # --- Configuration ---
     config = {
-        'device': 'mps',
+        'device': 'cuda',
         'data_list_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk03/train.txt',
         'data_dir_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk031/images_detected/',
         'val_perc': 0.2,

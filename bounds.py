@@ -40,7 +40,7 @@ def inv_kl(qs, ks):
 class PBBobj_Ntuple():
 
     def __init__(self, objective='fclassic', delta=0.025, delta_test=0.01,
-                 mc_samples=100, kl_penalty=1, device='mps',
+                 mc_samples=100, kl_penalty=1, device='cuda',
                  n_posterior=30000, n_bound=30000):
         super().__init__()
         self.objective = objective

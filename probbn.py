@@ -109,7 +109,7 @@ class _NormBase(Module):
             if num_batches_tracked_key not in state_dict:
                 state_dict[num_batches_tracked_key] = (
                     self.num_batches_tracked
-                    if self.num_batches_tracked is not None and self.num_batches_tracked.device != torch.device('mps')
+                    if self.num_batches_tracked is not None and self.num_batches_tracked.device != torch.device('cuda')
                     else torch.tensor(0, dtype=torch.long)
                 )
 

@@ -87,7 +87,7 @@ class Gaussian(nn.Module):
 
     """
 
-    def __init__(self, mu, rho, device='mps', fixed=False):
+    def __init__(self, mu, rho, device='cuda', fixed=False):
         super().__init__()
         self.mu = nn.Parameter(mu, requires_grad=not fixed)
         self.rho = nn.Parameter(rho, requires_grad=not fixed)
@@ -104,7 +104,7 @@ class Gaussian(nn.Module):
     def sample(self):
         # Return a sample from the Gaussian distribution
         # epsilon = torch.randn(self.sigma.size()).to(self.device)
-        epsilon = torch.randn(self.sigma.size(), device=self.device) # chngw to mps
+        epsilon = torch.randn(self.sigma.size(), device=self.device) # changed to cuda
         return self.mu + self.sigma * epsilon
 
     def compute_kl(self, other):
@@ -157,7 +157,7 @@ class ResProbLinear(nn.Module):
 
     """
 
-    def __init__(self, in_features, out_features, rho_prior, prior_dist='gaussian', device='mps', init_prior='weights', init_layer=None, init_layer_prior=None):
+    def __init__(self, in_features, out_features, rho_prior, prior_dist='gaussian', device='cuda', init_prior='weights', init_layer=None, init_layer_prior=None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -216,7 +216,7 @@ class ResProbLinear(nn.Module):
 class ResProbBN(nn.Module):
 
     def __init__(self, in_channels, rho_prior, prior_dist='gaussian',
-                 device='mps' , init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
+                 device='cuda' , init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = in_channels 
@@ -324,7 +324,7 @@ class ResProbConv2d(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, rho_prior, prior_dist='gaussian',
-                 device='mps', stride=1, padding=1, dilation=1, init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
+                 device='cuda', stride=1, padding=1, dilation=1, init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -414,7 +414,7 @@ class ResidualBlock(nn.Module):
 
         
 class ProbResidualBlock(nn.Module):
-    def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='mps', init_net=None):
+    def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super(ProbResidualBlock, self).__init__()
 
         self.conv1 = ResProbConv2d(
@@ -504,10 +504,10 @@ class ResNet(nn.Module):
 
 
 def ResNet18_new( ):
-    return ResNet(  ).to('mps')
+    return ResNet(  ).to('cuda')
 
 class ProbResidualBlock_bn(nn.Module):
-    def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='mps', init_net=None):
+    def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super(ProbResidualBlock_bn, self).__init__()
         self.inchannel = inchannel
 
@@ -567,7 +567,7 @@ class ProbResidualBlock_bn(nn.Module):
 
 class ProbResNet_BN(nn.Module):
 
-    def __init__(self, ProbResidualBlock_bn, rho_prior, prior_dist='gaussian', device='mps', init_net=None):
+    def __init__(self, ProbResidualBlock_bn, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super(ProbResNet_BN,self).__init__()
         self.inchannel = 64
         self.ResidualBlock_kl = 0
@@ -582,13 +582,13 @@ class ProbResNet_BN(nn.Module):
         self.bn1 = ResProbBN(64, rho_prior,prior_dist=prior_dist, device=device,
             init_layer=init_net1[1])
 
-        self.layer1 = self.make_layer(ProbResidualBlock_bn, 64, 2, rho_prior, prior_dist='gaussian', device='mps',
+        self.layer1 = self.make_layer(ProbResidualBlock_bn, 64, 2, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[4], stride=1)
-        self.layer2 = self.make_layer(ProbResidualBlock_bn, 128, 2, rho_prior, prior_dist='gaussian', device='mps',
+        self.layer2 = self.make_layer(ProbResidualBlock_bn, 128, 2, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[5], stride=2)
-        self.layer3 = self.make_layer(ProbResidualBlock_bn, 256, 2, rho_prior, prior_dist='gaussian', device='mps',
+        self.layer3 = self.make_layer(ProbResidualBlock_bn, 256, 2, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[6], stride=2)
-        self.layer4 = self.make_layer(ProbResidualBlock_bn, 512, 2, rho_prior, prior_dist='gaussian', device='mps',
+        self.layer4 = self.make_layer(ProbResidualBlock_bn, 512, 2, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[7], stride=2)
 
         self.cnn1 = nn.Sequential(*self.layer1)
@@ -600,7 +600,7 @@ class ProbResNet_BN(nn.Module):
         # self.fc = ResProbLinear(512, 2, rho_prior, prior_dist=prior_dist,
         #                         device=device, init_layer=init_net.fc1 )
 
-    def make_layer(self, block, channels, num_blocks, rho_prior, prior_dist='gaussian', device='mps', init_net=None,
+    def make_layer(self, block, channels, num_blocks, rho_prior, prior_dist='gaussian', device='cuda', init_net=None,
                    stride=1):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
@@ -712,7 +712,7 @@ class ProbResNet_BN(nn.Module):
 
 
 
-def ProbResNet_bn(rho_prior, prior_dist='gaussian', device='mps', init_net=None):
+def ProbResNet_bn(rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
     return ProbResNet_BN(ProbResidualBlock_bn,rho_prior, prior_dist=prior_dist, device=device, init_net=init_net).to(device)
 
 
@@ -739,7 +739,7 @@ def output_transform(x, clamping=True, pmin=1e-4):
     return output
 
 
-def trainNNet(net, optimizer, epoch, train_loader,   errornet0,device='mps', verbose=False):
+def trainNNet(net, optimizer, epoch, train_loader,   errornet0,device='cuda', verbose=False):
     """Train function for a standard NN (including CNN)
 
     Parameters
@@ -787,7 +787,7 @@ def trainNNet(net, optimizer, epoch, train_loader,   errornet0,device='mps', ver
 
 
 
-def testNNet(net, test_loader, device='mps', verbose=True):
+def testNNet(net, test_loader, device='cuda', verbose=True):
     """Test function for a standard NN (including CNN)
 
     Parameters
@@ -887,7 +887,7 @@ def trainPNNet(net, optimizer, pbobj, epoch, train_loader, lambda_var=None, opti
             avgerr += err
 
 
-def testStochastic(net, test_loader, pbobj, device='mps'):
+def testStochastic(net, test_loader, pbobj, device='cuda'):
     """Test function for the stochastic predictor using a PNN
 
     Parameters
@@ -928,7 +928,7 @@ def testStochastic(net, test_loader, pbobj, device='mps'):
     return cross_entropy/(batch_id+1), 1-(correct/total)
 
 
-def testPosteriorMean(net, test_loader, pbobj, device='mps'):
+def testPosteriorMean(net, test_loader, pbobj, device='cuda'):
     """Test function for the deterministic predictor using a PNN
     (uses the posterior mean)
 
@@ -970,7 +970,7 @@ def testPosteriorMean(net, test_loader, pbobj, device='mps'):
     return cross_entropy/(batch_id+1), 1-(correct/total)
 
 
-def testEnsemble(net, test_loader, pbobj, device='mps', samples=10):
+def testEnsemble(net, test_loader, pbobj, device='cuda', samples=10):
     """Test function for the ensemble predictor using a PNN
 
     Parameters
@@ -1021,7 +1021,7 @@ def testEnsemble(net, test_loader, pbobj, device='mps', samples=10):
     return cross_entropy_all/(batch_id+1), 1-(correct/total)
 
 
-def computeRiskCertificates(net, toolarge, pbobj, device='mps', lambda_var=None, train_loader=None, whole_train=None):
+def computeRiskCertificates(net, toolarge, pbobj, device='cuda', lambda_var=None, train_loader=None, whole_train=None):
     """Function to compute risk certificates and other statistics at the end of training
 
     Parameters
