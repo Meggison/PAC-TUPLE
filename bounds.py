@@ -208,5 +208,137 @@ class PBBobj_Ntuple():
         # The function now returns a single certified risk for the N-tuple loss.
         return final_risk, kl.item()/self.n_bound, empirical_risk_bound, pseudo_accuracy
 
+    def test_stochastic_ntuple(self, net, data_loader, ntuple_loss_fn):
+        """
+        Test function for stochastic predictor adapted for N-tuple loss.
+        
+        Args:
+            net: The probabilistic network to evaluate
+            data_loader: DataLoader for test data
+            ntuple_loss_fn: The N-tuple loss function
+            
+        Returns:
+            tuple: (average_risk, average_pseudo_accuracy)
+        """
+        net.eval()
+        total_risk = 0.0
+        total_pseudo_accuracy = 0.0
+        
+        with torch.no_grad():
+            for batch in tqdm(data_loader, desc="Stochastic Testing", leave=False):
+                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                total_risk += loss.item()
+                total_pseudo_accuracy += pseudo_acc
+        
+        avg_risk = total_risk / len(data_loader)
+        avg_pseudo_accuracy = total_pseudo_accuracy / len(data_loader)
+        
+        return avg_risk, avg_pseudo_accuracy
+
+    def test_posterior_mean_ntuple(self, net, data_loader, ntuple_loss_fn):
+        """
+        Test function for posterior mean predictor adapted for N-tuple loss.
+        
+        Args:
+            net: The probabilistic network to evaluate
+            data_loader: DataLoader for test data
+            ntuple_loss_fn: The N-tuple loss function
+            
+        Returns:
+            tuple: (average_risk, average_pseudo_accuracy)
+        """
+        net.eval()
+        total_risk = 0.0
+        total_pseudo_accuracy = 0.0
+        
+        with torch.no_grad():
+            for batch in tqdm(data_loader, desc="Posterior Mean Testing", leave=False):
+                # Set network to use posterior mean (not sampling)
+                net.train(False)  # Ensure we're in eval mode
+                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                total_risk += loss.item()
+                total_pseudo_accuracy += pseudo_acc
+        
+        avg_risk = total_risk / len(data_loader)
+        avg_pseudo_accuracy = total_pseudo_accuracy / len(data_loader)
+        
+        return avg_risk, avg_pseudo_accuracy
+
+    def test_ensemble_ntuple(self, net, data_loader, ntuple_loss_fn, num_samples=10):
+        """
+        Test function for ensemble predictor adapted for N-tuple loss.
+        
+        Args:
+            net: The probabilistic network to evaluate
+            data_loader: DataLoader for test data
+            ntuple_loss_fn: The N-tuple loss function
+            num_samples: Number of ensemble members
+            
+        Returns:
+            tuple: (average_risk, average_pseudo_accuracy)
+        """
+        net.eval()
+        total_risk = 0.0
+        total_pseudo_accuracy = 0.0
+        
+        with torch.no_grad():
+            for batch in tqdm(data_loader, desc="Ensemble Testing", leave=False):
+                batch_risk = 0.0
+                batch_pseudo_acc = 0.0
+                
+                # Sample multiple times for ensemble
+                for _ in range(num_samples):
+                    loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                    batch_risk += loss.item()
+                    batch_pseudo_acc += pseudo_acc
+                
+                # Average over ensemble
+                total_risk += batch_risk / num_samples
+                total_pseudo_accuracy += batch_pseudo_acc / num_samples
+        
+        avg_risk = total_risk / len(data_loader)
+        avg_pseudo_accuracy = total_pseudo_accuracy / len(data_loader)
+        
+        return avg_risk, avg_pseudo_accuracy
+
+    def comprehensive_evaluation(self, net, data_loader, ntuple_loss_fn):
+        """
+        Comprehensive evaluation using all three prediction methods.
+        
+        Args:
+            net: The probabilistic network to evaluate
+            data_loader: DataLoader for test data
+            ntuple_loss_fn: The N-tuple loss function
+            
+        Returns:
+            dict: Dictionary containing results from all evaluation methods
+        """
+        print("Running comprehensive evaluation...")
+        
+        results = {}
+        
+        # Stochastic predictor
+        stoch_risk, stoch_acc = self.test_stochastic_ntuple(net, data_loader, ntuple_loss_fn)
+        results['stochastic'] = {'risk': stoch_risk, 'pseudo_accuracy': stoch_acc}
+        
+        # Posterior mean predictor
+        mean_risk, mean_acc = self.test_posterior_mean_ntuple(net, data_loader, ntuple_loss_fn)
+        results['posterior_mean'] = {'risk': mean_risk, 'pseudo_accuracy': mean_acc}
+        
+        # Ensemble predictor
+        ensemble_risk, ensemble_acc = self.test_ensemble_ntuple(net, data_loader, ntuple_loss_fn)
+        results['ensemble'] = {'risk': ensemble_risk, 'pseudo_accuracy': ensemble_acc}
+        
+        # Final risk certificate
+        final_risk, kl_div, emp_risk, pseudo_acc = self.compute_final_stats_risk_ntuple(net, data_loader, ntuple_loss_fn)
+        results['certificate'] = {
+            'final_risk': final_risk,
+            'kl_divergence': kl_div,
+            'empirical_risk': emp_risk,
+            'pseudo_accuracy': pseudo_acc
+        }
+        
+        return results
+
     
 
