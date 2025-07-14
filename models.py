@@ -91,7 +91,7 @@ class Gaussian(nn.Module):
         super().__init__()
         self.mu = nn.Parameter(mu, requires_grad=not fixed)
         self.rho = nn.Parameter(rho, requires_grad=not fixed)
-        self.device = device
+        self.device = device if torch.cuda.is_available() else 'cpu'
 
     @property
     def sigma(self):
@@ -468,19 +468,19 @@ class ProbResidualBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self  ):
+    def __init__(self):
         super(ResNet, self).__init__()
-        resnet18_model = models.resnet18(pretrained=True)
-        self.resnet18_model = nn.Sequential(*list(resnet18_model.children())[:-1])
+        resnet50_model = models.resnet50(pretrained=True)
+        self.resnet50_model = nn.Sequential(*list(resnet50_model.children())[:-1])
 
         # --- OPTIONAL: Add a classification head as per the paper ---
         # This allows you to combine N-tuple loss with classification loss
-        # self.classifier = nn.Linear(512, num_classes) # num_classes = number of IDs in train set
+        # self.classifier = nn.Linear(2048, num_classes) # num_classes = number of IDs in train set
 
-        # self.fc1 = nn.Linear(512, 2)
+        # self.fc1 = nn.Linear(2048, 2)
 
     def forward_once(self, x):
-        out = self.resnet18_model(x)
+        out = self.resnet50_model(x)
         out = out.view(out.size(0), -1)
 
         return out
@@ -491,7 +491,7 @@ class ResNet(nn.Module):
       images and returns their feature embeddings.
       """
       # 1. Extract feature embeddings
-      features = self.res(x)
+      features = self.resnet50_model(x)
       embeddings = features.view(features.size(0), -1)
 
       # 2. OPTIONAL: Get classification logits if you are using combined loss
@@ -503,8 +503,8 @@ class ResNet(nn.Module):
       return embeddings
 
 
-def ResNet18_new( ):
-    return ResNet(  ).to('cuda')
+def ResNet50_new():
+    return ResNet().to('cuda')
 
 class ProbResidualBlock_bn(nn.Module):
     def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
@@ -565,14 +565,94 @@ class ProbResidualBlock_bn(nn.Module):
             return self.conv1, self.conv2, 0, self.bn1, self.bn2,0
 
 
+class ProbBottleneckBlock(nn.Module):
+    """
+    Probabilistic Bottleneck Block for ResNet50 architecture.
+    Implements the 1x1 -> 3x3 -> 1x1 convolution pattern with expansion factor of 4.
+    """
+    def __init__(self, inplanes, planes, stride, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
+        super(ProbBottleneckBlock, self).__init__()
+        self.expansion = 4
+        
+        # 1x1 conv
+        self.conv1 = ResProbConv2d(
+            inplanes, planes, 1, rho_prior, prior_dist=prior_dist, device=device, 
+            stride=1, padding=0, init_layer=init_net.conv1)
+        
+        self.bn1 = ResProbBN(planes, rho_prior, prior_dist=prior_dist, device=device,
+                            init_layer=init_net.bn1)
+        
+        # 3x3 conv
+        self.conv2 = ResProbConv2d(
+            planes, planes, 3, rho_prior, prior_dist=prior_dist, device=device,
+            stride=stride, padding=1, init_layer=init_net.conv2)
+        
+        self.bn2 = ResProbBN(planes, rho_prior, prior_dist=prior_dist, device=device,
+                            init_layer=init_net.bn2)
+        
+        # 1x1 conv (expansion)
+        self.conv3 = ResProbConv2d(
+            planes, planes * self.expansion, 1, rho_prior, prior_dist=prior_dist, device=device,
+            stride=1, padding=0, init_layer=init_net.conv3)
+        
+        self.bn3 = ResProbBN(planes * self.expansion, rho_prior, prior_dist=prior_dist, device=device,
+                            init_layer=init_net.bn3)
+        
+        # Shortcut connection
+        self.downsample = False
+        self.shortcut = nn.Sequential()
+        self.shortcut_bn = nn.Sequential()
+        
+        if stride != 1 or inplanes != planes * self.expansion:
+            self.downsample = True
+            self.shortcut = ResProbConv2d(
+                inplanes, planes * self.expansion, 1, rho_prior, prior_dist=prior_dist, device=device,
+                stride=stride, padding=0, init_layer=init_net.downsample[0])
+            self.shortcut_bn = ResProbBN(planes * self.expansion, rho_prior, prior_dist=prior_dist, device=device,
+                                        init_layer=init_net.downsample[1])
+    
+    def forward(self, x, sample=False):
+        identity = x
+        
+        # First conv block
+        out = self.conv1(x, sample)
+        out = self.bn1(out, sample)
+        out = nn.ReLU(inplace=True)(out)
+        
+        # Second conv block
+        out = self.conv2(out, sample)
+        out = self.bn2(out, sample)
+        out = nn.ReLU(inplace=True)(out)
+        
+        # Third conv block
+        out = self.conv3(out, sample)
+        out = self.bn3(out, sample)
+        
+        # Shortcut connection
+        if self.downsample:
+            identity = self.shortcut(x, sample)
+            identity = self.shortcut_bn(identity, sample)
+        
+        out += identity
+        out = nn.ReLU(inplace=True)(out)
+        
+        return out
+    
+    def resnet_kl(self):
+        if self.downsample:
+            return self.conv1, self.conv2, self.conv3, self.shortcut, self.bn1, self.bn2, self.bn3, self.shortcut_bn
+        else:
+            return self.conv1, self.conv2, self.conv3, 0, self.bn1, self.bn2, self.bn3, 0
+
+
 class ProbResNet_BN(nn.Module):
 
-    def __init__(self, ProbResidualBlock_bn, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
+    def __init__(self, ProbBottleneckBlock, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super(ProbResNet_BN,self).__init__()
-        self.inchannel = 64
+        self.inplanes = 64
         self.ResidualBlock_kl = 0
-        # init_net1 = init_net.resnet18_model[0]
-        init_net1 = list(init_net.resnet18_model.children())  # make it a list of layers
+        # init_net1 = init_net.resnet50_model[0]
+        init_net1 = list(init_net.resnet50_model.children())  # make it a list of layers
 
 
         self.con1 = ResProbConv2d(
@@ -582,35 +662,32 @@ class ProbResNet_BN(nn.Module):
         self.bn1 = ResProbBN(64, rho_prior,prior_dist=prior_dist, device=device,
             init_layer=init_net1[1])
 
-        self.layer1 = self.make_layer(ProbResidualBlock_bn, 64, 2, rho_prior, prior_dist='gaussian', device='cuda',
+        self.layer1 = self.make_layer(ProbBottleneckBlock, 64, 3, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[4], stride=1)
-        self.layer2 = self.make_layer(ProbResidualBlock_bn, 128, 2, rho_prior, prior_dist='gaussian', device='cuda',
+        self.layer2 = self.make_layer(ProbBottleneckBlock, 128, 4, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[5], stride=2)
-        self.layer3 = self.make_layer(ProbResidualBlock_bn, 256, 2, rho_prior, prior_dist='gaussian', device='cuda',
+        self.layer3 = self.make_layer(ProbBottleneckBlock, 256, 6, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[6], stride=2)
-        self.layer4 = self.make_layer(ProbResidualBlock_bn, 512, 2, rho_prior, prior_dist='gaussian', device='cuda',
+        self.layer4 = self.make_layer(ProbBottleneckBlock, 512, 3, rho_prior, prior_dist='gaussian', device='cuda',
                                       init_net=init_net1[7], stride=2)
 
         self.cnn1 = nn.Sequential(*self.layer1)
         self.cnn2 = nn.Sequential(*self.layer2)
-
         self.cnn3 = nn.Sequential(*self.layer3)
         self.cnn4 = nn.Sequential(*self.layer4)
 
         # self.fc = ResProbLinear(512, 2, rho_prior, prior_dist=prior_dist,
         #                         device=device, init_layer=init_net.fc1 )
 
-    def make_layer(self, block, channels, num_blocks, rho_prior, prior_dist='gaussian', device='cuda', init_net=None,
+    def make_layer(self, block, planes, num_blocks, rho_prior, prior_dist='gaussian', device='cuda', init_net=None,
                    stride=1):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
 
         for i in range(len(strides)):
-            block1 = block(self.inchannel, channels, strides[i], rho_prior, prior_dist=prior_dist, device=device, init_net=init_net[i])
-
+            block1 = block(self.inplanes, planes, strides[i], rho_prior, prior_dist=prior_dist, device=device, init_net=init_net[i])
             layers.append(block1)
-
-            self.inchannel = channels
+            self.inplanes = planes * 4  # Bottleneck expansion = 4
 
         return layers
         
@@ -620,17 +697,21 @@ class ProbResNet_BN(nn.Module):
         x = nn.ReLU(inplace=True)(x)
         x = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)(x)
 
-        output = self.cnn1[0](x,sample)
-        output = self.cnn1[1](output,sample)
+        # Layer 1 (2 blocks)
+        for i in range(2):
+            output = self.cnn1[i](x if i == 0 else output, sample)
 
-        output = self.cnn2[0](output,sample)
-        output = self.cnn2[1](output,sample)
+        # Layer 2 (2 blocks)
+        for i in range(2):
+            output = self.cnn2[i](output, sample)
 
-        output = self.cnn3[0](output,sample)
-        output = self.cnn3[1](output,sample)
+        # Layer 3 (2 blocks)
+        for i in range(2):
+            output = self.cnn3[i](output, sample)
         
-        output = self.cnn4[0](output,sample)
-        output = self.cnn4[1](output,sample)
+        # Layer 4 (2 blocks)
+        for i in range(2):
+            output = self.cnn4[i](output, sample)
         output = nn.AdaptiveAvgPool2d((1, 1))(output)
 
         output = output.view(output.size(0), -1)
@@ -648,14 +729,21 @@ class ProbResNet_BN(nn.Module):
         x = nn.ReLU(inplace=True)(x)
         x = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)(x)
 
-        output = self.cnn1[0](x,sample)
-        output = self.cnn1[1](output,sample)
-        output = self.cnn2[0](output,sample)
-        output = self.cnn2[1](output,sample)
-        output = self.cnn3[0](output,sample)
-        output = self.cnn3[1](output,sample)
-        output = self.cnn4[0](output,sample)
-        output = self.cnn4[1](output,sample)
+        # Layer 1 (2 blocks)
+        for i in range(2):
+            output = self.cnn1[i](x if i == 0 else output, sample)
+
+        # Layer 2 (2 blocks)
+        for i in range(2):
+            output = self.cnn2[i](output, sample)
+
+        # Layer 3 (2 blocks)
+        for i in range(2):
+            output = self.cnn3[i](output, sample)
+        
+        # Layer 4 (2 blocks)
+        for i in range(2):
+            output = self.cnn4[i](output, sample)
         
         output = nn.AdaptiveAvgPool2d((1, 1))(output)
         embeddings = output.view(output.size(0), -1)
@@ -678,34 +766,31 @@ class ProbResNet_BN(nn.Module):
         self.cnn4_kl_div = 0
 
         for i in range(len(self.layer1)):
-            conv1, conv2, conv3,bn1,bn2,bn3 = self.layer1[i].resnet_kl()
-            if isinstance(conv3,int):
-                temp = conv1.kl_div + conv2.kl_div +bn1.kl_div + bn2.kl_div  
-            else:
-                temp = conv1.kl_div + conv2.kl_div + conv3.kl_div +bn1.kl_div + bn2.kl_div+bn3.kl_div
+            conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer1[i].resnet_kl()
+            temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
+            if not isinstance(shortcut, int):
+                temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn1_kl_div += temp
+            
         for i in range(len(self.layer2)):
-            conv1, conv2, conv3,bn1,bn2,bn3 = self.layer2[i].resnet_kl()
-            if isinstance(conv3,int):
-                temp = conv1.kl_div + conv2.kl_div  +bn1.kl_div + bn2.kl_div  
-            else:
-                temp = conv1.kl_div + conv2.kl_div + conv3.kl_div  +bn1.kl_div + bn2.kl_div+bn3.kl_div
+            conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer2[i].resnet_kl()
+            temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
+            if not isinstance(shortcut, int):
+                temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn2_kl_div += temp
 
         for i in range(len(self.layer3)):
-            conv1, conv2, conv3,bn1,bn2,bn3 = self.layer3[i].resnet_kl()
-            if isinstance(conv3,int):
-                temp = conv1.kl_div + conv2.kl_div  +bn1.kl_div + bn2.kl_div  
-            else:
-                temp = conv1.kl_div + conv2.kl_div + conv3.kl_div +bn1.kl_div + bn2.kl_div+bn3.kl_div
+            conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer3[i].resnet_kl()
+            temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
+            if not isinstance(shortcut, int):
+                temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn3_kl_div += temp
 
         for i in range(len(self.layer4)):
-            conv1, conv2, conv3,bn1,bn2,bn3 = self.layer4[i].resnet_kl()
-            if isinstance(conv3,int):
-                temp = conv1.kl_div + conv2.kl_div +bn1.kl_div + bn2.kl_div  
-            else:
-                temp = conv1.kl_div + conv2.kl_div + conv3.kl_div +bn1.kl_div + bn2.kl_div+bn3.kl_div
+            conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer4[i].resnet_kl()
+            temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
+            if not isinstance(shortcut, int):
+                temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn4_kl_div += temp
 
         return self.con1.kl_div + self.cnn1_kl_div + self.cnn2_kl_div + self.cnn3_kl_div + self.cnn4_kl_div #+ self.fc.kl_div   + self.fc2.kl_div + self.fc3.kl_div
@@ -713,7 +798,7 @@ class ProbResNet_BN(nn.Module):
 
 
 def ProbResNet_bn(rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
-    return ProbResNet_BN(ProbResidualBlock_bn,rho_prior, prior_dist=prior_dist, device=device, init_net=init_net).to(device)
+    return ProbResNet_BN(ProbBottleneckBlock, rho_prior, prior_dist=prior_dist, device=device, init_net=init_net).to(device)
 
 
 def output_transform(x, clamping=True, pmin=1e-4):
