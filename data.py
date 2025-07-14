@@ -6,14 +6,14 @@ from torchvision import datasets, transforms
 from torch.utils.data.sampler import SubsetRandomSampler
 from PIL import Image
 from random import choice, sample
-from torch.utils.data import  Dataset,  ConcatDataset
+from torch.utils.data import  Dataset, ConcatDataset, DataLoader
 import random
 from random import choice, sample
 
 
 def prepare_data_list(data_list_path, save_dir):
     os.makedirs(save_dir, exist_ok=True)
-    with open(data_list_path, 'r') as f:
+    with open(data_list_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
         print(data)
         print(len(data))
@@ -26,7 +26,7 @@ def prepare_data_list(data_list_path, save_dir):
         image_list.append(image_path)
 
     output_file = os.path.join(save_dir, 'train.txt')
-    with open(output_file, 'w') as f:
+    with open(output_file, 'w', encoding='utf-8') as f:
         for img in image_list:
             f.write(f"{img}\n")
 
@@ -40,7 +40,7 @@ def prepare_data_list(data_list_path, save_dir):
         query_list.append(image_path)
 
     test_file = os.path.join(save_dir, 'test.txt')
-    with open(test_file, 'w') as f:
+    with open(test_file, 'w', encoding='utf-8') as f:
         for img in query_list:
             f.write(f"{img}\n")
     print(f"[✓] Saved test.txt to: {test_file}")
@@ -69,7 +69,7 @@ def reid_data_prepare(data_list_path, train_dir_path):
     transform = transforms.Compose(transform_train_list)
 
     # Open the file containing the list of image paths
-    with open(data_list_path, 'r') as f:
+    with open(data_list_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
             img_filename = line
@@ -236,9 +236,6 @@ def pair_pretrain_on_dataset(source, project_path='./', dataset_parent='./',val_
         print("len train class:", len(train[1]),"len val class:", 0, "len test class:", len(test[1]))
 
     return train, val, test,class_img_labels, class_val,class_num
-  
-  import torch
-from torch.utils.data import Dataset
 
 class NTupleDataset(Dataset):
     """
@@ -275,8 +272,6 @@ class NTupleDataset(Dataset):
 
         return anchor, positive, negative_set
 
-import torch
-from torch.utils.data import DataLoader, ConcatDataset
 
 def loadbatches(train, val, test, loader_kargs, batch_size):
     """
@@ -328,153 +323,6 @@ def loadbatches(train, val, test, loader_kargs, batch_size):
 
     return train_loader, test_loader, prior_loader, set_bound_1batch, test_1batch, set_val_bound
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class MetaLearner(nn.Module):
-    """
-    Implements the meta-learner subnet phi(·) from Equation (7) of the paper.
-    It takes instance features and maps them to refined reference nodes.
-
-    Args:
-        embedding_dim (int): The dimension of the input feature embeddings (d).
-        reduction_ratio (int): The ratio for dimension reduction in the bottleneck layer.
-    """
-    def __init__(self, embedding_dim=1024, reduction_ratio=8):
-        super(MetaLearner, self).__init__()
-        bottleneck_dim = embedding_dim // reduction_ratio
-
-        self.mapper = nn.Sequential(
-            nn.Linear(embedding_dim, bottleneck_dim),
-            nn.BatchNorm1d(bottleneck_dim),
-            # The paper does not specify an activation, but ReLU is a common choice.
-            # nn.ReLU(inplace=True),
-            nn.Linear(bottleneck_dim, embedding_dim)
-        )
-
-    def forward(self, x):
-        return self.mapper(x)
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class MetaLearner(nn.Module):
-    """
-    Implements the meta-learner subnet phi(·) from Equation (7) of the paper.
-    It takes instance features and maps them to refined reference nodes.
-
-    Args:
-        embedding_dim (int): The dimension of the input feature embeddings (d).
-        reduction_ratio (int): The ratio for dimension reduction in the bottleneck layer.
-    """
-    def __init__(self, embedding_dim=1024, reduction_ratio=8):
-        super(MetaLearner, self).__init__()
-        bottleneck_dim = embedding_dim // reduction_ratio
-
-        self.mapper = nn.Sequential(
-            nn.Linear(embedding_dim, bottleneck_dim),
-            nn.BatchNorm1d(bottleneck_dim),
-            # The paper does not specify an activation, but ReLU is a common choice.
-            # nn.ReLU(inplace=True),
-            nn.Linear(bottleneck_dim, embedding_dim)
-        )
-
-    def forward(self, x):
-        return self.mapper(x)
-
-
-class NTupleLoss(nn.Module):
-    """
-    Implementation of N-tuple and Meta Prototypical N-tuple (MPN-tuple) loss.
-
-    Args:
-        mode (str): The loss mode. Must be one of 'regular' or 'mpn'.
-                    - 'regular': Standard N-tuple loss using instance features directly.
-                    - 'mpn': Meta Prototypical N-tuple loss using a meta-learner.
-        embedding_dim (int): The dimension of the feature embeddings.
-                             Required only if mode is 'mpn'.
-        initial_temp (float): The initial temperature (tau) for scaling similarities.
-    """
-    def __init__(self, mode='mpn', embedding_dim=1024, initial_temp=0.05):
-        super(NTupleLoss, self).__init__()
-
-        if mode not in ['regular', 'mpn']:
-            raise ValueError("Mode must be either 'regular' or 'mpn'")
-        self.mode = mode
-
-        # The paper makes the temperature a learnable parameter by learning s = 1/tau
-        # We will do the same for flexibility.
-        self.log_s = nn.Parameter(torch.log(torch.tensor(1.0 / initial_temp)))
-
-        if self.mode == 'mpn':
-            self.meta_learner = MetaLearner(embedding_dim=embedding_dim)
-
-    def forward(self, anchor_embed, positive_embed, negative_embeds):
-        """
-        Calculates the N-tuple loss.
-
-        Args:
-            anchor_embed (torch.Tensor): Embeddings of the anchor samples.
-                                         Shape: (batch_size, embedding_dim)
-            positive_embed (torch.Tensor): Embeddings of the positive samples.
-                                          Shape: (batch_size, embedding_dim)
-            negative_embeds (torch.Tensor): Embeddings of the negative samples.
-                                           Shape: (batch_size, N-2, embedding_dim)
-
-        Returns:
-            torch.Tensor: The calculated N-tuple loss for the batch.
-        """
-        # Get the reference nodes for positive and negative samples
-        if self.mode == 'mpn':
-            # For MPN loss, pass positives and negatives through the meta-learner
-            # to get the reference nodes (prototypes).
-            # The paper averages multiple instances for a prototype; here we assume
-            # the provided single positive/negative is the basis for its prototype.
-            positive_ref = self.meta_learner(positive_embed)
-
-            # Reshape negatives to pass through the linear layers of the meta-learner
-            batch_size, n_negatives, embed_dim = negative_embeds.shape
-            negatives_flat = negative_embeds.view(-1, embed_dim)
-            negative_ref_flat = self.meta_learner(negatives_flat)
-            negative_ref = negative_ref_flat.view(batch_size, n_negatives, embed_dim)
-
-        else: # 'regular' mode
-            # For regular N-tuple loss, the instance embeddings are the reference nodes.
-            positive_ref = positive_embed
-            negative_ref = negative_embeds
-
-        # --- Calculate similarities ---
-        # Cosine similarity is used as per the paper
-        sim_positive = F.cosine_similarity(anchor_embed, positive_ref)
-
-        # To calculate similarity between anchor and all negatives, we need to unsqueeze
-        # the anchor to enable broadcasting across the N-2 dimension.
-        # anchor_embed shape: (B, D) -> (B, 1, D)
-        # negative_ref shape: (B, N-2, D)
-        sim_negatives = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_ref, dim=2)
-
-        # --- Formulate as a classification problem ---
-        # The goal is to classify the anchor as belonging to the positive reference
-        # over all negative references. This can be solved with CrossEntropyLoss.
-
-        # The logits are the scaled similarities.
-        # Concatenate the positive similarity with all negative similarities.
-        # Shape: (B, 1+ (N-2)) -> (B, N-1)
-        logits = torch.cat([sim_positive.unsqueeze(1), sim_negatives], dim=1)
-
-        # Scale logits by the learned temperature parameter s = 1/tau
-        logits *= torch.exp(self.log_s)
-
-        # The target label for every sample is 0, because the positive class
-        # is always at index 0 of our logits tensor.
-        targets = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
-
-        # Calculate the cross-entropy loss, which is equivalent to the
-        loss = F.cross_entropy(logits, targets)
-
-        return loss
 
 class DynamicNTupleDataset(Dataset):
     """
