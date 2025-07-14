@@ -52,6 +52,20 @@ class PBBobj_Ntuple():
         self.n_posterior = n_posterior
         self.n_bound = n_bound
         
+    def get_tuple_size(self, batch):
+        """
+        Extract the actual tuple size (N) from a batch.
+        
+        Args:
+            batch: Tuple of (anchor, positive, negatives)
+            
+        Returns:
+            int: The tuple size N = 1 (anchor) + 1 (positive) + num_negatives
+        """
+        anchor, positive, negatives = batch
+        num_negatives = negatives.shape[1]  # N-2 in your notation
+        return 1 + 1 + num_negatives  # anchor + positive + negatives = N
+        
     def compute_losses(self, net, batch, ntuple_loss_fn, bounded=True):
 
         anchor, positive, negatives = batch
@@ -87,13 +101,16 @@ class PBBobj_Ntuple():
 
         return total_bounded_loss, pseudo_accuracy, (anchor_embed, positive_embed, negative_embeds)
     
-    def bound(self, empirical_risk, kl, train_size, lambda_var=None):
+    def bound(self, empirical_risk, kl, train_size, tuple_size, lambda_var=None):
         # compute training objectives
         
         if self.objective == 'fclassic':
             kl = kl * self.kl_penalty
+            # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
+            combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
             kl_ratio = torch.div(
-                kl + np.log((self.n_bound*(self.n_bound-1)/2)/self.delta), 2*np.trunc(train_size/2))
+                kl + np.log(combinations / self.delta), 
+                np.trunc(train_size / tuple_size))
             
             train_obj = empirical_risk + torch.sqrt(kl_ratio)
         else:
@@ -160,16 +177,19 @@ class PBBobj_Ntuple():
                 - kl_div_scaled (torch.Tensor): The scaled KL divergence.
                 - empirical_risk (torch.Tensor): The raw (unbounded) N-tuple loss.
         """
-        # 1. Calculate the KL divergence for the model's weights. This is unchanged.
+        # 1. Extract the actual tuple size from the batch
+        tuple_size = self.get_tuple_size(batch)
+        
+        # 2. Calculate the KL divergence for the model's weights. This is unchanged.
         kl = net.compute_kl()
 
-        # 2. Compute the empirical risk using your new compute_losses function.
+        # 3. Compute the empirical risk using your new compute_losses function.
         #    We set bounded=False here to get the raw loss for the bound calculation.
         #    The `compute_losses` function you provided already handles the network call.
         empirical_risk, _, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=False)
 
-        # 3. Compute the PAC-Bayes bound using the N-tuple risk.
-        bound = self.bound(empirical_risk, kl, self.n_posterior)
+        # 4. Compute the PAC-Bayes bound using the N-tuple risk and actual tuple size.
+        bound = self.bound(empirical_risk, kl, self.n_posterior, tuple_size)
 
         return bound, kl / self.n_posterior, empirical_risk
     
@@ -189,21 +209,27 @@ class PBBobj_Ntuple():
                 - empirical_risk_bound (float): The high-confidence empirical risk.
                 - pseudo_accuracy (float): The average pseudo-accuracy over the dataset.
         """
-        # 1. Calculate the total KL divergence of the final trained model.
+        # 1. Extract tuple size from the first batch to determine the combinatorial term
+        first_batch = next(iter(data_loader))
+        tuple_size = self.get_tuple_size(first_batch)
+        
+        # 2. Calculate the total KL divergence of the final trained model.
         kl = net.compute_kl()
 
-        # 2. Estimate the true empirical risk and pseudo-accuracy over the entire dataset
+        # 3. Estimate the true empirical risk and pseudo-accuracy over the entire dataset
         #    by calling the adapted mcsampling_ntuple function.
         estimated_risk, pseudo_accuracy = self.mcsampling_ntuple(net, data_loader, ntuple_loss_fn)
 
-        # 3. Invert the Chernoff bound to get a high-confidence empirical risk value.
+        # 4. Invert the Chernoff bound to get a high-confidence empirical risk value.
         empirical_risk_bound = inv_kl(
             estimated_risk, np.log(2 / self.delta_test) / self.mc_samples
         )
 
-        # 4. Compute the final PAC-Bayes risk certificate using the new empirical risk.
-        kl_term = kl + np.log((self.n_bound * (self.n_bound - 1) / 2 + 1) / self.delta_test)
-        final_risk = inv_kl(empirical_risk_bound, kl_term / np.trunc(self.n_bound / 2))
+        # 5. Compute the final PAC-Bayes risk certificate using the new empirical risk and actual tuple size.
+        # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
+        combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
+        kl_term = kl + np.log((combinations + 1) / self.delta_test)
+        final_risk = inv_kl(empirical_risk_bound, kl_term / np.trunc(self.n_bound / tuple_size))
 
         # The function now returns a single certified risk for the N-tuple loss.
         return final_risk, kl.item()/self.n_bound, empirical_risk_bound, pseudo_accuracy
