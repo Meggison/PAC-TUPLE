@@ -3,33 +3,26 @@ import numpy as np
 import torch
 from tqdm import tqdm, trange
 from data import reid_data_prepare, ntuple_reid_data, DynamicNTupleDataset, loadbatches
-from models import ResNet, ProbResNet50_BN, ProbBottleneck
+from models import ResNet, ProbResNet_BN, ProbResidualBlock_bn
 from bounds import PBBobj_Ntuple
 from loss import NTupleLoss
 import torch.optim as optim
 
-
 def adjust_learning_rate(optimizer, epoch, config):
-    """
-    Implements the learning rate schedule from the paper:
-    Linear warm-up for `warmup_epochs` followed by step decay.
-    """
+    # adjust the learning rate based on the epoch
     warmup_epochs = 20
     lr_start = 8e-6
     lr_max = 8e-4
-    
+
     if epoch < warmup_epochs:
-        # Linear warm-up from lr_start to lr_max
-        lr = lr_start + (lr_max - lr_start) * epoch / warmup_epochs
+        lr = lr_start + (lr_max - lr_start) * (epoch / warmup_epochs)
+    
     else:
-        # Step decay after warmup
-        # Paper: "decayed by a factor of 0.5 for every 60 epochs"
         decay_steps = (epoch - warmup_epochs) // 60
         lr = lr_max * (0.5 ** decay_steps)
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-
 
 def run_ntuple_experiment(config):
     """
@@ -70,9 +63,10 @@ def run_ntuple_experiment(config):
     print("\n--- Initializing Models ---")
     net0 = ResNet().to(device)
     
-    net = ProbResNet50_BN(ProbBottleneck, [3, 4, 6, 3], rho_prior=rho_prior, init_net=net0, device=device).to(device)
+    # FIXED: Pass the ProbResidualBlock_bn class as the first argument
+    net = ProbResNet_BN(ProbResidualBlock_bn, rho_prior=rho_prior, init_net=net0, device=device).to(device)
     
-    optimizer = optim.Adam(net.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
+    optimizer = optim.Adam(net.parameters(), lr=config['learning_rate'], momentum=config['weight_decay'])
 
     # --- 4. SETUP FOR PAC-BAYES ---
     print("\n--- Setting up PAC-Bayes Objective ---")
@@ -86,7 +80,7 @@ def run_ntuple_experiment(config):
         n_posterior=len(train_dataset),
         n_bound=len(val_dataset) if val_dataset else 0
     )
-    ntuple_loss_fn = NTupleLoss(mode=config['ntuple_mode'], embedding_dim=config['embedding_dim']).to(device)
+    ntuple_loss_fn = NTupleLoss(mode=config['ntuple_mode'], embedding_dim=2048).to(device)
 
     # --- 5. MAIN TRAINING LOOP ---
     print("\n--- Starting Training ---")
@@ -104,21 +98,12 @@ def run_ntuple_experiment(config):
         if (epoch + 1) % config['test_interval'] == 0:
             if prior_loader:
                 print(f"\n--- Evaluating at Epoch {epoch+1} ---")
-                
-                # Use the comprehensive evaluation from PBBobj_Ntuple
-                eval_results = pbobj.comprehensive_evaluation(net, prior_loader, ntuple_loss_fn)
-                
-                # Print detailed results
-                print(f"  Stochastic Predictor - Risk: {eval_results['stochastic']['risk']:.5f}, Pseudo-Acc: {eval_results['stochastic']['pseudo_accuracy']:.4f}")
-                print(f"  Posterior Mean Predictor - Risk: {eval_results['posterior_mean']['risk']:.5f}, Pseudo-Acc: {eval_results['posterior_mean']['pseudo_accuracy']:.4f}")
-                print(f"  Ensemble Predictor - Risk: {eval_results['ensemble']['risk']:.5f}, Pseudo-Acc: {eval_results['ensemble']['pseudo_accuracy']:.4f}")
-                print(f"  Certified N-Tuple Risk: {eval_results['certificate']['final_risk']:.5f}")
-                print(f"  KL Divergence: {eval_results['certificate']['kl_divergence']:.5f}")
-                print(f"  Empirical N-Tuple Risk (on val set): {eval_results['certificate']['empirical_risk']:.5f}")
-                print(f"  Certificate Pseudo-Accuracy (on val set): {eval_results['certificate']['pseudo_accuracy']:.4f}")
-                
-                # Store comprehensive results
-                results[epoch+1] = eval_results
+                final_risk, kl, emp_risk, pseudo_acc = pbobj.compute_final_stats_risk_ntuple(net, prior_loader, ntuple_loss_fn)
+                print(f"  Certified N-Tuple Risk: {final_risk:.5f}")
+                print(f"  KL Divergence: {kl:.5f}")
+                print(f"  Empirical N-Tuple Risk (on val set): {emp_risk:.5f}")
+                print(f"  Pseudo-Accuracy (on val set): {pseudo_acc:.4f}")
+                results[epoch+1] = {'risk': final_risk, 'kl': kl, 'empirical_risk': emp_risk, 'pseudo_accuracy': pseudo_acc}
 
     print("\n--- Training Finished ---")
     return results
@@ -140,20 +125,20 @@ if __name__ == '__main__':
         'data_dir_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk031/images_detected/',
         'val_perc': 0.2,
         'batch_size': 64,
-        'learning_rate': 8e-4,  # Starting LR, will be adjusted by the scheduler
+        'learning_rate': 8e-4,
         'weight_decay': 5e-4,
+        'momentum': 0.9,
         'sigma_prior': 0.1,
-        'train_epochs': 100, # Increased from 5, paper uses 600
-        'test_interval': 10, # Adjusted for more epochs
+        'train_epochs': 100,
+        'test_interval': 10,
         'objective': 'fclassic',
         'delta': 0.025,
         'delta_test': 0.01,
         'mc_samples': 100,
         'kl_penalty': 1.0,
-        'N': 4,
+        'N': 4, # Number of samples in each N-tuple
         'samples_per_class': 4,
-        'ntuple_mode': 'mpn',
-        'embedding_dim': 2048, # Updated for ResNet-50
+        'ntuple_mode': 'regular',  # 'regular' or 'mpn'
         # Set num_workers to 0 if you continue to see multiprocessing issues,
         # otherwise you can try a value > 0 for faster data loading.
         'num_workers': 4
