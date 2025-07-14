@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from tqdm import tqdm, trange
 from data import reid_data_prepare, ntuple_reid_data, DynamicNTupleDataset, loadbatches
-from models import ResNet, ProbResNet_BN, ProbResidualBlock_bn
+from models import ResNet, ProbResNet_BN, ProbBottleneckBlock
 from bounds import PBBobj_Ntuple
 from loss import NTupleLoss
 import torch.optim as optim
@@ -63,10 +63,9 @@ def run_ntuple_experiment(config):
     print("\n--- Initializing Models ---")
     net0 = ResNet().to(device)
     
-    # FIXED: Pass the ProbResidualBlock_bn class as the first argument
-    net = ProbResNet_BN(ProbResidualBlock_bn, rho_prior=rho_prior, init_net=net0, device=device).to(device)
-    
-    optimizer = optim.Adam(net.parameters(), lr=config['learning_rate'], momentum=config['weight_decay'])
+    # FIXED: Pass the ProbBottleneckBlock class as the first argument
+    net = ProbResNet_BN(ProbBottleneckBlock, rho_prior=rho_prior, init_net=net0, device=device).to(device)
+    optimizer = optim.Adam(net.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
 
     # --- 4. SETUP FOR PAC-BAYES ---
     print("\n--- Setting up PAC-Bayes Objective ---")
@@ -120,7 +119,7 @@ import time
 if __name__ == '__main__':
     # --- Configuration ---
     config = {
-        'device': 'cuda'    ,
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'data_list_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk03/train.txt',
         'data_dir_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk031/images_detected/',
         'val_perc': 0.2,
