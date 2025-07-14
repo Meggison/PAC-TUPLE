@@ -19,7 +19,7 @@ class MetaLearner(nn.Module):
             nn.Linear(embedding_dim, bottleneck_dim),
             nn.BatchNorm1d(bottleneck_dim),
             # The paper does not specify an activation, but ReLU is a common choice.
-            # nn.ReLU(inplace=True), 
+            nn.ReLU(inplace=True),
             nn.Linear(bottleneck_dim, embedding_dim)
         )
 
@@ -39,7 +39,7 @@ class NTupleLoss(nn.Module):
                              Required only if mode is 'mpn'.
         initial_temp (float): The initial temperature (tau) for scaling similarities.
     """
-    def __init__(self, mode='mpn', embedding_dim=1024, initial_temp=0.05):
+    def __init__(self, mode='mpn', embedding_dim=1024, initial_temp=0.1):
         super(NTupleLoss, self).__init__()
         
         if mode not in ['regular', 'mpn']:
@@ -86,6 +86,11 @@ class NTupleLoss(nn.Module):
             # For regular N-tuple loss, the instance embeddings are the reference nodes.
             positive_ref = positive_embed
             negative_ref = negative_embeds
+
+            # L2 normalise the embeddings to ensure cosine similarity is used
+            anchor_embed = F.normalize(anchor_embed, p=2, dim=1)
+            positive_ref = F.normalize(positive_ref, p=2, dim=1)
+            negative_ref = F.normalize(negative_ref, p=2, dim=-1)
         
         # --- Calculate similarities ---
         # Cosine similarity is used as per the paper
