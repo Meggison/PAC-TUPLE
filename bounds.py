@@ -2,8 +2,8 @@ import math
 import numpy as np
 import torch
 from tqdm import tqdm
-from loss import NTupleLoss
 import torch.nn.functional as F
+from loss import NTupleLoss
 
 def inv_kl(qs, ks):
     """Inversion of the binary kl
@@ -62,7 +62,7 @@ class PBBobj_Ntuple():
         Returns:
             int: The tuple size N = 1 (anchor) + 1 (positive) + num_negatives
         """
-        anchor, positive, negatives = batch
+        _, _, negatives = batch  # ignore anchor and positive
         num_negatives = negatives.shape[1]  # N-2 in your notation
         return 1 + 1 + num_negatives  # anchor + positive + negatives = N
         
@@ -92,12 +92,11 @@ class PBBobj_Ntuple():
             total_bounded_loss = loss_ntuple
 
         # 7. Compute the "pseudo-accuracy" as a secondary metric
-        with torch.no_grad():
-            sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
-            sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
-            max_sim_neg, _ = torch.max(sim_neg, dim=1)
-            correct_predictions = (sim_pos > max_sim_neg).sum().item()
-            pseudo_accuracy = correct_predictions / batch_size
+        sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+        sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+        max_sim_neg, _ = torch.max(sim_neg, dim=1)
+        correct_predictions = (sim_pos > max_sim_neg).sum().item()
+        pseudo_accuracy = correct_predictions / batch_size
 
         return total_bounded_loss, pseudo_accuracy, (anchor_embed, positive_embed, negative_embeds)
     
@@ -115,6 +114,19 @@ class PBBobj_Ntuple():
             train_obj = empirical_risk + torch.sqrt(kl_ratio)
         else:
             raise RuntimeError(f'Wrong objective {self.objective}')
+        return train_obj
+    
+    def bound_exact(self, empirical_risk, kl, train_size, tuple_size, lambda_var=None):
+        # Follows the exact bound calculation as per the original paper
+        if self.objective == 'fclassic':
+            combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
+            
+            penalty_term = (kl + np.log((combinations + 1) / self.delta)) / (2 * np.trunc(train_size / tuple_size))
+            
+            train_obj = empirical_risk + penalty_term  # No square root
+        else:
+            raise RuntimeError(f'Wrong objective {self.objective}')
+        
         return train_obj
     
     def mcsampling_ntuple(self, net, data_loader, ntuple_loss_fn):
