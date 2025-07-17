@@ -69,6 +69,11 @@ class PBBobj_Ntuple():
     def compute_losses(self, net, batch, ntuple_loss_fn, bounded=True):
 
         anchor, positive, negatives = batch
+        # Ensure all tensors are on the same device
+        anchor = anchor.to(self.device)
+        positive = positive.to(self.device)
+        negatives = negatives.to(self.device)
+        
         # 2. Get embeddings and classification logits from the network
         # Your model's forward pass should be updated to return both
         # e.g., `return embeddings, logits`
@@ -86,8 +91,10 @@ class PBBobj_Ntuple():
 
         # 6. Apply bounding for PAC-Bayes analysis
         if bounded:
-            # Use a robust bounding method like sigmoid since we're combining losses
-            total_bounded_loss = torch.sigmoid(loss_ntuple)
+            # Use a more stable bounding method that avoids sigmoid saturation
+            # Clamp loss to reasonable range before sigmoid to prevent saturation
+            clamped_loss = torch.clamp(loss_ntuple, max=10.0)  # Prevent extreme values
+            total_bounded_loss = torch.sigmoid(clamped_loss)
         else:
             total_bounded_loss = loss_ntuple
 
@@ -117,7 +124,21 @@ class PBBobj_Ntuple():
         return train_obj
     
     def bound_exact(self, empirical_risk, kl, train_size, tuple_size, lambda_var=None):
-        # Follows the exact bound calculation as per the original paper
+        """
+        Exact bound following f_obj = R_S(q) + (1/(2*floor(n/m))) * [KL(q||p) + ln((C(n,m)+1)/delta)]
+        """
+        if self.objective == 'fclassic':
+            kl = kl * self.kl_penalty
+            # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
+            combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
+            
+            # Follow exact objective function from the paper
+            penalty_term = (kl + np.log((combinations + 1) / self.delta)) / (2 * np.trunc(train_size / tuple_size))
+            
+            train_obj = empirical_risk + penalty_term  # Direct addition, no square root
+        else:
+            raise RuntimeError(f'Wrong objective {self.objective}')
+        return train_obj
         if self.objective == 'fclassic':
             combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
             
@@ -241,7 +262,11 @@ class PBBobj_Ntuple():
         # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
         combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
         kl_term = kl + np.log((combinations + 1) / self.delta_test)
+        # final_risk = inv_kl(empirical_risk_bound, kl_term / np.trunc(self.n_bound / tuple_size))
+        # Updated final risk computation
         # CORRECTED CODE
+        ks_final = kl_term / (2 * np.trunc(self.n_bound / tuple_size))
+        final_risk = inv_kl(empirical_risk_bound, ks_final)
 
         # The function now returns a single certified risk for the N-tuple loss.
         return final_risk, kl.item()/self.n_bound, empirical_risk_bound, pseudo_accuracy
