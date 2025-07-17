@@ -173,8 +173,9 @@ class ResProbLinear(nn.Module):
                 weights_mu_prior = init_layer_prior.weight
                 bias_mu_prior = init_layer_prior.bias
         else:
-                weights_mu_prior = weights_mu_init
-                bias_mu_prior = bias_mu_init
+                # Initialize prior close to posterior with small noise for non-zero KL
+                weights_mu_prior = weights_mu_init + 0.01 * torch.randn_like(weights_mu_init)
+                bias_mu_prior = bias_mu_init + 0.01 * torch.randn_like(bias_mu_init)
      
         if prior_dist == 'gaussian':
             dist = Gaussian
@@ -240,9 +241,9 @@ class ResProbBN(nn.Module):
         bias_rho_init = torch.ones(out_channels) * rho_prior
 
         
-        weights_mu_prior = weights_mu_init
-                
-        bias_mu_prior = bias_mu_init
+        # Initialize prior close to posterior with small noise for non-zero KL
+        weights_mu_prior = weights_mu_init + 0.01 * torch.randn_like(weights_mu_init)
+        bias_mu_prior = bias_mu_init + 0.01 * torch.randn_like(bias_mu_init)
 
 
         if prior_dist == 'gaussian':
@@ -346,7 +347,8 @@ class ResProbConv2d(nn.Module):
         weights_rho_init = torch.ones(
             out_channels, in_channels, *self.kernel_size) * rho_prior
 
-        weights_mu_prior = weights_mu_init
+        # Initialize prior close to posterior with small noise for non-zero KL
+        weights_mu_prior = weights_mu_init + 0.01 * torch.randn_like(weights_mu_init)
 
         if prior_dist == 'gaussian':
             dist = Gaussian
@@ -652,7 +654,7 @@ class ProbResNet_BN(nn.Module):
         self.inplanes = 64
         self.ResidualBlock_kl = 0
         # init_net1 = init_net.resnet50_model[0]
-        init_net1 = list(init_net.resnet50_model.children())  # make it a list of layers
+        init_net1 = list(init_net.resnet50_model)  # make it a list of layers
 
 
         self.con1 = ResProbConv2d(
@@ -663,26 +665,29 @@ class ProbResNet_BN(nn.Module):
             init_layer=init_net1[1])
 
         self.layer1 = self.make_layer(ProbBottleneckBlock, 64, 3, rho_prior, prior_dist='gaussian', device='cuda',
-                                      init_net=init_net1[4], stride=1)
+                                      init_net=list(init_net1[4].children()), stride=1)
         self.layer2 = self.make_layer(ProbBottleneckBlock, 128, 4, rho_prior, prior_dist='gaussian', device='cuda',
-                                      init_net=init_net1[5], stride=2)
+                                      init_net=list(init_net1[5].children()), stride=2)
         self.layer3 = self.make_layer(ProbBottleneckBlock, 256, 6, rho_prior, prior_dist='gaussian', device='cuda',
-                                      init_net=init_net1[6], stride=2)
+                                      init_net=list(init_net1[6].children()), stride=2)
         self.layer4 = self.make_layer(ProbBottleneckBlock, 512, 3, rho_prior, prior_dist='gaussian', device='cuda',
-                                      init_net=init_net1[7], stride=2)
+                                      init_net=list(init_net1[7].children()), stride=2)
 
         self.cnn1 = nn.Sequential(*self.layer1)
         self.cnn2 = nn.Sequential(*self.layer2)
         self.cnn3 = nn.Sequential(*self.layer3)
         self.cnn4 = nn.Sequential(*self.layer4)
 
-        # self.fc = ResProbLinear(512, 2, rho_prior, prior_dist=prior_dist,
+        # self.fc = ResProbLinear(2048, 2, rho_prior, prior_dist=prior_dist,
         #                         device=device, init_layer=init_net.fc1 )
 
     def make_layer(self, block, planes, num_blocks, rho_prior, prior_dist='gaussian', device='cuda', init_net=None,
                    stride=1):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
+
+        if not isinstance(init_net, list) or len(init_net) != len(strides):
+            raise ValueError(f"init_net must be a list of length {len(strides)} (got {type(init_net)} of length {len(init_net) if isinstance(init_net, list) else 'N/A'})")
 
         for i in range(len(strides)):
             block1 = block(self.inplanes, planes, strides[i], rho_prior, prior_dist=prior_dist, device=device, init_net=init_net[i])
@@ -718,44 +723,30 @@ class ProbResNet_BN(nn.Module):
         return output
 
     def forward(self, x, sample=False, clamping=True, pmin=1e-4):
-
-        """
-        ADAPTED FOR N-TUPLE: This is the new forward pass. It takes a single batch of
-        images 'x' and produces their embeddings. The old logic from `forward_once`
-        is moved here.
-        """
         x = self.con1(x, sample)
         x = self.bn1(x, sample)
         x = nn.ReLU(inplace=True)(x)
         x = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)(x)
 
-        # Layer 1 (2 blocks)
-        for i in range(2):
-            output = self.cnn1[i](x if i == 0 else output, sample)
-
-        # Layer 2 (2 blocks)
-        for i in range(2):
-            output = self.cnn2[i](output, sample)
-
-        # Layer 3 (2 blocks)
-        for i in range(2):
-            output = self.cnn3[i](output, sample)
+        # Fix layer iterations to match ResNet50 structure
+        # Layer 1 (3 blocks)
+        for i in range(len(self.layer1)):
+            x = self.cnn1[i](x, sample)
         
-        # Layer 4 (2 blocks)
-        for i in range(2):
-            output = self.cnn4[i](output, sample)
+        # Layer 2 (4 blocks) 
+        for i in range(len(self.layer2)):
+            x = self.cnn2[i](x, sample)
         
-        output = nn.AdaptiveAvgPool2d((1, 1))(output)
-        embeddings = output.view(output.size(0), -1)
+        # Layer 3 (6 blocks)
+        for i in range(len(self.layer3)):
+            x = self.cnn3[i](x, sample)
         
-        # --- Optional: Get classification logits ---
-        # If using combined loss, pass embeddings through the classifier.
-        # Note: The output_transform is for classification, so it's applied here.
-        # logits = self.classifier(embeddings, sample)
-        # transformed_logits = output_transform(logits, clamping, pmin)
-        # return embeddings, transformed_logits
-
-        # If using only N-tuple loss, just return the embeddings
+        # Layer 4 (3 blocks)
+        for i in range(len(self.layer4)):
+            x = self.cnn4[i](x, sample)
+        
+        x = nn.AdaptiveAvgPool2d((1, 1))(x)
+        embeddings = x.view(x.size(0), -1)
         return embeddings
 
     def compute_kl(self):
@@ -768,32 +759,32 @@ class ProbResNet_BN(nn.Module):
         for i in range(len(self.layer1)):
             conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer1[i].resnet_kl()
             temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
-            if not isinstance(shortcut, int):
+            if not isinstance(shortcut, int) and not isinstance(shortcut_bn, int):
                 temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn1_kl_div += temp
             
         for i in range(len(self.layer2)):
             conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer2[i].resnet_kl()
             temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
-            if not isinstance(shortcut, int):
+            if not isinstance(shortcut, int) and not isinstance(shortcut_bn, int):
                 temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn2_kl_div += temp
 
         for i in range(len(self.layer3)):
             conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer3[i].resnet_kl()
             temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
-            if not isinstance(shortcut, int):
+            if not isinstance(shortcut, int) and not isinstance(shortcut_bn, int):
                 temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn3_kl_div += temp
 
         for i in range(len(self.layer4)):
             conv1, conv2, conv3, shortcut, bn1, bn2, bn3, shortcut_bn = self.layer4[i].resnet_kl()
             temp = conv1.kl_div + conv2.kl_div + conv3.kl_div + bn1.kl_div + bn2.kl_div + bn3.kl_div
-            if not isinstance(shortcut, int):
+            if not isinstance(shortcut, int) and not isinstance(shortcut_bn, int):
                 temp += shortcut.kl_div + shortcut_bn.kl_div
             self.cnn4_kl_div += temp
 
-        return self.con1.kl_div + self.cnn1_kl_div + self.cnn2_kl_div + self.cnn3_kl_div + self.cnn4_kl_div #+ self.fc.kl_div   + self.fc2.kl_div + self.fc3.kl_div
+        return self.con1.kl_div + self.bn1.kl_div + self.cnn1_kl_div + self.cnn2_kl_div + self.cnn3_kl_div + self.cnn4_kl_div
 
 
 
@@ -1039,9 +1030,9 @@ def testPosteriorMean(net, test_loader, pbobj, device='cuda'):
         for data1,data2,target in test_loader:
             batch_id +=1
             try:
-                        target  = target.squeeze(1)
+                target  = target.squeeze(1)
             except:
-                        pass
+                pass
             data1,data2, target = data1.to(device),data2.to(device), target.to(device)
              
             outputs = net(data1, data2, sample=False, clamping=True, pmin=pbobj.pmin)
@@ -1140,3 +1131,17 @@ def computeRiskCertificates(net, toolarge, pbobj, device='cuda', lambda_var=None
                 net, lambda_var=lambda_var, clamping=True, data_loader=train_loader)
 
     return train_obj, risk_ce, risk_01, kl, loss_ce_train, err_01_train
+
+def verify_model_dimensions(model, device='cuda'):
+    """
+    Verify that the model outputs the expected embedding dimensions.
+    """
+    model.eval()
+    with torch.no_grad():
+        dummy_input = torch.randn(1, 3, 224, 224).to(device)
+        output = model(dummy_input)
+        print(f"Model output shape: {output.shape}")
+        print(f"Expected embedding dimension: 2048")
+        assert output.shape[1] == 2048, f"Expected 2048, got {output.shape[1]}"
+        print("✓ Model embedding dimension is correct!")
+    return output.shape[1]
