@@ -1,0 +1,42 @@
+# Dataset images (large files)
+cuhk03/images_labeled/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+ntupleenv/
+venv/
+env/
+ENV/
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Model checkpoints and logs
+*.pth
+*.pt
+logs/
+runs/
+checkpoints/
+
+# Research and experimental files
+cuhk03/research/
