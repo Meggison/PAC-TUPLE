@@ -7,22 +7,10 @@ from models import ResNet, ProbResNet_BN, ProbBottleneckBlock
 from bounds import PBBobj_Ntuple
 from loss import NTupleLoss
 import torch.optim as optim
+import time
 
-def adjust_learning_rate(optimizer, epoch, config):
-    # adjust the learning rate based on the epoch
-    warmup_epochs = 20
-    lr_start = 8e-6
-    lr_max = 8e-4
 
-    if epoch < warmup_epochs:
-        lr = lr_start + (lr_max - lr_start) * (epoch / warmup_epochs)
-    
-    else:
-        decay_steps = (epoch - warmup_epochs) // 60
-        lr = lr_max * (0.5 ** decay_steps)
-
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+#ch
 
 def run_ntuple_experiment(config):
     """
@@ -66,6 +54,9 @@ def run_ntuple_experiment(config):
     # FIXED: Pass the ProbBottleneckBlock class as the first argument
     net = ProbResNet_BN(ProbBottleneckBlock, rho_prior=rho_prior, init_net=net0, device=device).to(device)
     optimizer = optim.Adam(net.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
+    
+    # Add learning rate scheduler for better training stability
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.8)
 
     # --- 4. SETUP FOR PAC-BAYES ---
     print("\n--- Setting up PAC-Bayes Objective ---")
@@ -86,12 +77,19 @@ def run_ntuple_experiment(config):
     results = {}
     for epoch in trange(config['train_epochs'], desc="Training Progress"):
         net.train()
-        adjust_learning_rate(optimizer, epoch, config)
+        # adjust_learning_rate(optimizer, epoch, config)
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
             optimizer.zero_grad()
             bound, _, _ = pbobj.train_obj_ntuple(net, batch, ntuple_loss_fn)
             bound.backward()
+            
+            # Add gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            
             optimizer.step()
+        
+        # Step the learning rate scheduler
+        scheduler.step()
 
         # --- 6. PERIODIC EVALUATION ---
         if (epoch + 1) % config['test_interval'] == 0:
@@ -108,14 +106,6 @@ def run_ntuple_experiment(config):
     return results
 
 
-# --- Example Usage in a Notebook Cell ---
-# Define your configuration
-
-
-import time
-
-# ... (keep all your other functions and imports as they are) ...
-
 if __name__ == '__main__':
     # --- Configuration ---
     config = {
@@ -124,7 +114,7 @@ if __name__ == '__main__':
         'data_dir_path': '/Users/misanmeggison/Self-certified-Tuple-wise/cuhk031/images_detected/',
         'val_perc': 0.2,
         'batch_size': 64,
-        'learning_rate': 8e-4,
+        'learning_rate': 1e-4,  # Reduced for stability with large KL
         'weight_decay': 5e-4,
         'momentum': 0.9,
         'sigma_prior': 0.1,
@@ -134,7 +124,7 @@ if __name__ == '__main__':
         'delta': 0.025,
         'delta_test': 0.01,
         'mc_samples': 100,
-        'kl_penalty': 1.0,
+        'kl_penalty': 1.0,  # Restored to normal value
         'N': 4, # Number of samples in each N-tuple
         'samples_per_class': 4,
         'ntuple_mode': 'regular',  # 'regular' or 'mpn'
