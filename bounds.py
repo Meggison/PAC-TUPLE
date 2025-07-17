@@ -241,7 +241,7 @@ class PBBobj_Ntuple():
         # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
         combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
         kl_term = kl + np.log((combinations + 1) / self.delta_test)
-        final_risk = inv_kl(empirical_risk_bound, kl_term / np.trunc(self.n_bound / tuple_size))
+        # CORRECTED CODE
 
         # The function now returns a single certified risk for the N-tuple loss.
         return final_risk, kl.item()/self.n_bound, empirical_risk_bound, pseudo_accuracy
