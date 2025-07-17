@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.functional import cosine_similarity
 
 class MetaLearner(nn.Module):
     """
@@ -11,7 +12,7 @@ class MetaLearner(nn.Module):
         embedding_dim (int): The dimension of the input feature embeddings (d).
         reduction_ratio (int): The ratio for dimension reduction in the bottleneck layer.
     """
-    def __init__(self, embedding_dim=1024, reduction_ratio=8):
+    def __init__(self, embedding_dim=2048, reduction_ratio=8):
         super(MetaLearner, self).__init__()
         bottleneck_dim = embedding_dim // reduction_ratio
         
@@ -39,7 +40,7 @@ class NTupleLoss(nn.Module):
                              Required only if mode is 'mpn'.
         initial_temp (float): The initial temperature (tau) for scaling similarities.
     """
-    def __init__(self, mode='mpn', embedding_dim=1024, initial_temp=0.1):
+    def __init__(self, mode='mpn', embedding_dim=2048, initial_temp=1.0):
         super(NTupleLoss, self).__init__()
         
         if mode not in ['regular', 'mpn']:
@@ -48,6 +49,7 @@ class NTupleLoss(nn.Module):
 
         # The paper makes the temperature a learnable parameter by learning s = 1/tau
         # We will do the same for flexibility.
+        # Initialize with tau=initial_temp, so s=1/initial_temp
         self.log_s = nn.Parameter(torch.log(torch.tensor(1.0 / initial_temp)))
 
         if self.mode == 'mpn':
@@ -93,14 +95,13 @@ class NTupleLoss(nn.Module):
             negative_ref = F.normalize(negative_ref, p=2, dim=-1)
         
         # --- Calculate similarities ---
-        # Cosine similarity is used as per the paper
-        sim_positive = F.cosine_similarity(anchor_embed, positive_ref)
+        sim_positive = cosine_similarity(anchor_embed, positive_ref)
         
         # To calculate similarity between anchor and all negatives, we need to unsqueeze
         # the anchor to enable broadcasting across the N-2 dimension.
         # anchor_embed shape: (B, D) -> (B, 1, D)
         # negative_ref shape: (B, N-2, D)
-        sim_negatives = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_ref, dim=2)
+        sim_negatives = cosine_similarity(anchor_embed.unsqueeze(1), negative_ref, dim=2)
         
         # --- Formulate as a classification problem ---
         # The goal is to classify the anchor as belonging to the positive reference
