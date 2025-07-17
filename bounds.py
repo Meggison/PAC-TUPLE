@@ -201,7 +201,7 @@ class PBBobj_Ntuple():
         empirical_risk, _, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=False)
 
         # 4. Compute the PAC-Bayes bound using the N-tuple risk and actual tuple size.
-        bound = self.bound(empirical_risk, kl, self.n_posterior, tuple_size)
+        bound = self.bound_exact(empirical_risk, kl, self.n_posterior, tuple_size)
 
         return bound, kl / self.n_posterior, empirical_risk
     
