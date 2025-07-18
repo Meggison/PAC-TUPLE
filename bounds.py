@@ -1,3 +1,20 @@
+"""
+CUSTOM PAC-BAYES BOUNDS IMPLEMENTATION
+
+This implementation follows your custom nested KL inversion bound:
+
+R(q) ≤ f^kl(f^kl(R_S(q̂_k), log(2/δ')/k), 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)])
+
+Key components:
+1. f^kl = inv_kl function (KL divergence inversion)
+2. Nested structure with two levels of concentration
+3. Custom combinatorial term C(n,m) for N-tuple sampling
+4. Monte Carlo error handling in the inner bound
+5. Main PAC-Bayes bound in the outer structure
+
+The implementation maintains your original bound structure while adapting it for N-tuple loss.
+"""
+
 import math
 import numpy as np
 import torch
@@ -56,6 +73,9 @@ class PBBobj_Ntuple():
         """
         Extract the actual tuple size (N) from a batch.
         
+        IMPORTANT: For PAC-Bayes theory to be valid, this must match
+        the combinatorial term in the bound computation.
+        
         Args:
             batch: Tuple of (anchor, positive, negatives)
             
@@ -64,7 +84,11 @@ class PBBobj_Ntuple():
         """
         _, _, negatives = batch  # ignore anchor and positive
         num_negatives = negatives.shape[1]  # N-2 in your notation
-        return 1 + 1 + num_negatives  # anchor + positive + negatives = N
+        tuple_size = 1 + 1 + num_negatives  # anchor + positive + negatives = N
+        
+        # CRITICAL: Ensure this matches your dataset's N parameter
+        # If your DynamicNTupleDataset uses N=4, this should return 4
+        return tuple_size
         
     def compute_losses(self, net, batch, ntuple_loss_fn, bounded=True):
 
@@ -125,29 +149,39 @@ class PBBobj_Ntuple():
     
     def bound_exact(self, empirical_risk, kl, train_size, tuple_size, lambda_var=None):
         """
-        Exact bound following f_obj = R_S(q) + (1/(2*floor(n/m))) * [KL(q||p) + ln((C(n,m)+1)/delta)]
+        CORRECTED: Your custom PAC-Bayes bound for N-tuple loss.
+        
+        Implements the nested KL inversion bound from your equation:
+        R(q) ≤ f^kl(f^kl(R_S(q̂_k), log(2/δ')/k), 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)])
+        
+        This is a two-level bound:
+        1. Inner f^kl handles Monte Carlo estimation error
+        2. Outer f^kl handles the main PAC-Bayes bound
         """
         if self.objective == 'fclassic':
             kl = kl * self.kl_penalty
-            # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
-            combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
             
-            # Follow exact objective function from the paper
-            penalty_term = (kl + np.log((combinations + 1) / self.delta)) / (2 * np.trunc(train_size / tuple_size))
+            # Compute combinatorial term C(n,m) for N-tuple sampling
+            if tuple_size <= 10:  # Prevent overflow for reasonable tuple sizes
+                num_combinations = math.comb(self.n_bound, tuple_size)
+            else:
+                # For large tuples, use Stirling approximation: n^m / m!
+                num_combinations = (self.n_bound ** tuple_size) / math.factorial(tuple_size)
             
-            train_obj = empirical_risk + penalty_term  # Direct addition, no square root
+            # Ensure numerical stability
+            num_combinations = min(num_combinations, self.n_bound ** tuple_size)
+            
+            # Your custom bound structure: 
+            # Second term of outer f^kl: 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)]
+            num_tuples = np.trunc(train_size / tuple_size)
+            second_term = (kl + np.log((num_combinations + 1) / self.delta)) / (2 * num_tuples)
+            
+            # For training, we directly use this as the penalty (no nested f^kl yet)
+            # The full nested structure is used in compute_final_stats_risk_ntuple
+            train_obj = empirical_risk + second_term
+            
         else:
             raise RuntimeError(f'Wrong objective {self.objective}')
-        return train_obj
-        if self.objective == 'fclassic':
-            combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
-            
-            penalty_term = (kl + np.log((combinations + 1) / self.delta)) / (2 * np.trunc(train_size / tuple_size))
-            
-            train_obj = empirical_risk + penalty_term  # No square root
-        else:
-            raise RuntimeError(f'Wrong objective {self.objective}')
-        
         return train_obj
     
     def mcsampling_ntuple(self, net, data_loader, ntuple_loss_fn):
@@ -228,48 +262,54 @@ class PBBobj_Ntuple():
     
     def compute_final_stats_risk_ntuple(self, net, data_loader, ntuple_loss_fn):
         """
-        Computes the final risk certificate for the N-tuple loss.
-
-        Args:
-            net (nn.Module): The probabilistic network to evaluate.
-            data_loader (DataLoader): DataLoader for the dataset to certify.
-            ntuple_loss_fn (callable): The external N-tuple loss function.
-
-        Returns:
-            tuple: A tuple containing:
-                - final_risk (float): The final certified upper bound on the N-tuple risk.
-                - kl_div (float): The KL divergence of the posterior from the prior.
-                - empirical_risk_bound (float): The high-confidence empirical risk.
-                - pseudo_accuracy (float): The average pseudo-accuracy over the dataset.
+        CORRECTED: Implements your custom nested KL inversion bound.
+        
+        Your bound: R(q) ≤ f^kl(f^kl(R_S(q̂_k), log(2/δ')/k), 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)])
+        
+        Where:
+        - f^kl is the KL inversion function (inv_kl)
+        - R_S(q̂_k) is the MC estimate of empirical risk
+        - k is the number of MC samples
+        - δ' is delta_test
+        - δ is delta for the main bound
         """
-        # 1. Extract tuple size from the first batch to determine the combinatorial term
+        # 1. Extract tuple size from the first batch
         first_batch = next(iter(data_loader))
         tuple_size = self.get_tuple_size(first_batch)
         
-        # 2. Calculate the total KL divergence of the final trained model.
+        # 2. Calculate the total KL divergence of the final trained model
         kl = net.compute_kl()
 
-        # 3. Estimate the true empirical risk and pseudo-accuracy over the entire dataset
-        #    by calling the adapted mcsampling_ntuple function.
+        # 3. Estimate empirical risk via Monte Carlo sampling
+        # This gives us R_S(q̂_k) - the MC estimate
         estimated_risk, pseudo_accuracy = self.mcsampling_ntuple(net, data_loader, ntuple_loss_fn)
 
-        # 4. Invert the Chernoff bound to get a high-confidence empirical risk value.
-        empirical_risk_bound = inv_kl(
-            estimated_risk, np.log(2 / self.delta_test) / self.mc_samples
-        )
+        # 4. FIRST KL INVERSION: Handle MC estimation error
+        # Inner f^kl(R_S(q̂_k), log(2/δ')/k)
+        mc_error_term = np.log(2 / self.delta_test) / self.mc_samples
+        mc_upper_bound = inv_kl(estimated_risk, mc_error_term)
 
-        # 5. Compute the final PAC-Bayes risk certificate using the new empirical risk and actual tuple size.
-        # Use binomial coefficient C(n, tuple_size) for variable tuple sizes
-        combinations = math.comb(self.n_bound, tuple_size) if tuple_size <= self.n_bound else self.n_bound**tuple_size
-        kl_term = kl + np.log((combinations + 1) / self.delta_test)
-        # final_risk = inv_kl(empirical_risk_bound, kl_term / np.trunc(self.n_bound / tuple_size))
-        # Updated final risk computation
-        # CORRECTED CODE
-        ks_final = kl_term / (2 * np.trunc(self.n_bound / tuple_size))
-        final_risk = inv_kl(empirical_risk_bound, ks_final)
+        # 5. SECOND KL INVERSION: Your custom PAC-Bayes bound
+        # Compute combinatorial term C(n,m)
+        if tuple_size <= 10:
+            num_combinations = math.comb(self.n_bound, tuple_size)
+        else:
+            num_combinations = (self.n_bound ** tuple_size) / math.factorial(tuple_size)
+        
+        num_combinations = min(num_combinations, self.n_bound ** tuple_size)
+        
+        # Second term: 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)]
+        num_tuples = np.trunc(self.n_bound / tuple_size)
+        second_term = (kl + np.log((num_combinations + 1) / self.delta)) / (2 * num_tuples)
+        
+        # Outer f^kl: final risk certificate
+        # R(q) ≤ f^kl(mc_upper_bound, second_term)
+        final_risk = inv_kl(mc_upper_bound, second_term)
+        
+        # Ensure risk is in [0,1] range
+        final_risk = min(final_risk, 1.0)
 
-        # The function now returns a single certified risk for the N-tuple loss.
-        return final_risk, kl.item()/self.n_bound, empirical_risk_bound, pseudo_accuracy
+        return final_risk, kl.item()/self.n_bound, mc_upper_bound, pseudo_accuracy
 
     def test_stochastic_ntuple(self, net, data_loader, ntuple_loss_fn):
         """
@@ -402,6 +442,55 @@ class PBBobj_Ntuple():
         }
         
         return results
-
     
+    def validate_pac_bayes_theory(self, tuple_size, train_size):
+        """
+        Validates that your custom PAC-Bayes bound implementation follows theoretical requirements.
+        
+        Your bound uses nested KL inversions with combinatorial terms for N-tuple loss.
+        """
+        warnings = []
+        
+        # Check 1: Tuple size consistency
+        if tuple_size != 4:  # Based on your config N=4
+            warnings.append(f"⚠️ Tuple size {tuple_size} doesn't match expected N=4")
+        
+        # Check 2: Dataset size requirements for your nested bound
+        min_samples = tuple_size * 50  # More relaxed for custom bounds
+        if train_size < min_samples:
+            warnings.append(f"⚠️ Training size {train_size} may be too small for tuple_size {tuple_size}")
+        
+        # Check 3: Combinatorial explosion C(n,m)
+        if tuple_size <= 10:
+            num_combos = math.comb(self.n_bound, tuple_size)
+        else:
+            num_combos = (self.n_bound ** tuple_size) / math.factorial(tuple_size)
+            
+        if num_combos > 1e15:  # Higher threshold for custom bounds
+            warnings.append(f"⚠️ Very large combinatorial term ({num_combos:.2e}) - bounds may be loose")
+        
+        # Check 4: MC samples for nested KL inversion
+        if self.mc_samples < 50:
+            warnings.append(f"⚠️ MC samples {self.mc_samples} may be too low for reliable nested KL inversion")
+        
+        # Check 5: KL penalty for your custom structure
+        if self.kl_penalty > 5:  # More relaxed for custom bounds
+            warnings.append(f"⚠️ KL penalty {self.kl_penalty} is high - may hurt performance")
+        elif self.kl_penalty < 0.1:
+            warnings.append(f"⚠️ KL penalty {self.kl_penalty} is very low - bounds may be loose")
+        
+        # Check 6: Confidence levels for nested structure
+        if self.delta > 0.05:
+            warnings.append(f"⚠️ Delta {self.delta} is high for nested bounds - consider lowering")
+        if self.delta_test > 0.05:
+            warnings.append(f"⚠️ Delta_test {self.delta_test} is high for nested structure")
+        
+        # Check 7: Bound tightness heuristic
+        num_tuples = np.trunc(train_size / tuple_size)
+        if num_tuples < 10:
+            warnings.append(f"⚠️ Very few tuples ({num_tuples}) - bounds may be very loose")
+        
+        return warnings
+
+
 
