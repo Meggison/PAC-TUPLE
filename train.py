@@ -8,6 +8,7 @@ from bounds import PBBobj_Ntuple
 from loss import NTupleLoss
 import torch.optim as optim
 import time
+import torch.nn.functional as F
 
 
 def run_ntuple_experiment(config):
@@ -76,6 +77,7 @@ def run_ntuple_experiment(config):
         net0.train()
         epoch_loss = 0
         num_batches = 0
+        epoch_correct = 0
         
         for batch in tqdm(prior_loader, desc=f"Prior Epoch {epoch+1}", leave=False):
             try:
@@ -96,6 +98,13 @@ def run_ntuple_experiment(config):
                 
                 # Compute N-tuple loss
                 loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
+
+                # compute pseudo-accuracy
+                sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+                sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+                max_sim_neg, _ = torch.max(sim_neg, dim=1)
+                epoch_correct += (sim_pos > max_sim_neg).sum().item()
+
                 loss.backward()
                 
                 torch.nn.utils.clip_grad_norm_(net0.parameters(), max_norm=1.0)
@@ -109,8 +118,10 @@ def run_ntuple_experiment(config):
                 continue
         
         avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
+        avg_acc  = epoch_correct / (num_batches * config['batch_size'])
+
         if epoch % 5 == 0:
-            print(f"Prior epoch {epoch}, avg loss: {avg_loss:.4f}")
+            print(f"Prior epoch {epoch}: avg loss={avg_loss:.4f}, pseudo-acc={avg_acc:.4f}")
     
     print("Prior training completed!")
 
