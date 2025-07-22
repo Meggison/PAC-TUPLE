@@ -1,6 +1,12 @@
 # Dataset images (large files)
 cuhk03/images_labeled/
 
+# Project test files
+cuhk03/test/
+
+# Code Backup files
+cuhk03/code_backup/
+
 # Python cache and compiled files
 __pycache__/
 *.py[cod]
@@ -9,14 +15,10 @@ __pycache__/
 
 # Virtual environments
 ntupleenv/
-venv/
-env/
-ENV/
 
 # System files
 .DS_Store
 .DS_Store?
-._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
