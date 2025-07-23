@@ -360,15 +360,15 @@ if __name__ == '__main__':
         'learning_rate': 1e-4,  # Good for Adam with PAC-Bayes
         'learning_rate_prior': 3e-4,  # Adam-friendly LR for prior training
         'weight_decay': 5e-4,
-        'sigma_prior': 0.05,
+        'sigma_prior': 0.5,
         'train_epochs': 100,
         'prior_epochs': 20,  # Epochs for prior training
         'test_interval': 10,
         'objective': 'fclassic',
-        'delta': 0.025,
-        'delta_test': 0.01,
+        'delta': 0.01,
+        'delta_test': 0.05,
         'mc_samples': 100,
-        'kl_penalty': 1.0,  # Good starting point for N-tuple loss
+        'kl_penalty': 0.001,  # Good starting point for N-tuple loss
         'N': 4, # Number of samples in each N-tuple
         'samples_per_class': 4,
         'ntuple_mode': 'regular',  # 'regular' or 'mpn'
