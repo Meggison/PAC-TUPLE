@@ -348,7 +348,7 @@ class PBBobj_Ntuple():
         
         with torch.no_grad():
             for batch in tqdm(data_loader, desc="Stochastic Testing", leave=False):
-                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True, sample=True)
                 total_risk += loss.item()
                 total_pseudo_accuracy += pseudo_acc
         
@@ -377,7 +377,7 @@ class PBBobj_Ntuple():
             for batch in tqdm(data_loader, desc="Posterior Mean Testing", leave=False):
                 # Set network to use posterior mean (not sampling)
                 net.train(False)  # Ensure we're in eval mode
-                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True, sample=True)
                 total_risk += loss.item()
                 total_pseudo_accuracy += pseudo_acc
         
@@ -410,7 +410,7 @@ class PBBobj_Ntuple():
                 
                 # Sample multiple times for ensemble
                 for _ in range(num_samples):
-                    loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                    loss, pseudo_acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True, sample=True)
                     batch_risk += loss.item()
                     batch_pseudo_acc += pseudo_acc
                 
