@@ -90,7 +90,7 @@ class PBBobj_Ntuple():
         # If your DynamicNTupleDataset uses N=4, this should return 4
         return tuple_size
         
-    def compute_losses(self, net, batch, ntuple_loss_fn, bounded=True):
+    def compute_losses(self, net, batch, ntuple_loss_fn, bounded=True, sample=True):
 
         anchor, positive, negatives = batch
         # Ensure all tensors are on the same device
@@ -102,7 +102,7 @@ class PBBobj_Ntuple():
         # Your model's forward pass should be updated to return both
         # e.g., `return embeddings, logits`
         all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
-        all_embeddings = net(all_images)
+        all_embeddings = net(all_images, sample=sample)
 
          # 3. Unpack embeddings and calculate N-tuple loss (Metric Loss)
         batch_size = anchor.shape[0]
@@ -113,6 +113,7 @@ class PBBobj_Ntuple():
         
         loss_ntuple = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
 
+
         # 6. Apply bounding for PAC-Bayes analysis
         if bounded:
             # Use a more stable bounding method that avoids sigmoid saturation
@@ -122,9 +123,16 @@ class PBBobj_Ntuple():
         else:
             total_bounded_loss = loss_ntuple
 
+        # 6. Apply bounding for PAC-Bayes analysis
+        # FIX: Normalize embeddings before calculating accuracy
+        
+        anchor_norm = F.normalize(anchor_embed, p=2, dim=1)
+        positive_norm = F.normalize(positive_embed, p=2, dim=1)
+        negative_norm = F.normalize(negative_embeds, p=2, dim=-1)
+
         # 7. Compute the "pseudo-accuracy" as a secondary metric
-        sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
-        sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+        sim_pos = F.cosine_similarity(anchor_norm, positive_norm)
+        sim_neg = F.cosine_similarity(anchor_norm.unsqueeze(1), negative_norm, dim=2)
         max_sim_neg, _ = torch.max(sim_neg, dim=1)
         correct_predictions = (sim_pos > max_sim_neg).sum().item()
         pseudo_accuracy = correct_predictions / batch_size
