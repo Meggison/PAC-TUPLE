@@ -323,7 +323,16 @@ class PBBobj_Ntuple():
         
         # Outer f^kl: final risk certificate
         # R(q) ≤ f^kl(mc_upper_bound, second_term)
-        final_risk = inv_kl(mc_upper_bound, second_term)
+        # final_risk = inv_kl(mc_upper_bound, second_term)
+       # Calculate k = number of tuples for the bound computation set
+        num_tuples = np.trunc(self.n_bound / tuple_size)
+
+        # The complexity term for the standard PAC-Bayes-kl bound (Theorem 1 in paper)
+        # Note the denominator is k (not 2k) for the final KL inversion.
+        complexity_term = (kl + np.log(2 * np.sqrt(num_tuples) / self.delta)) / num_tuples
+        complexity_term = max(complexity_term, 0) # Ensure non-negative
+
+        final_risk = inv_kl(mc_upper_bound, complexity_term)
         
         # Ensure risk is in [0,1] range
         final_risk = min(final_risk, 1.0)
