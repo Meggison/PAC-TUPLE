@@ -318,16 +318,16 @@ class PBBobj_Ntuple():
 
         # 5. SECOND KL INVERSION: Your custom PAC-Bayes bound
         # Compute combinatorial term C(n,m)
-        if tuple_size <= 10:
-            num_combinations = math.comb(self.n_bound, tuple_size)
-        else:
-            num_combinations = (self.n_bound ** tuple_size) / math.factorial(tuple_size)
+        # if tuple_size <= 10:
+        #     num_combinations = math.comb(self.n_bound, tuple_size)
+        # else:
+        #     num_combinations = (self.n_bound ** tuple_size) / math.factorial(tuple_size)
         
-        num_combinations = min(num_combinations, self.n_bound ** tuple_size)
+        # num_combinations = min(num_combinations, self.n_bound ** tuple_size)
         
-        # Second term: 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)]
-        num_tuples = np.trunc(self.n_bound / tuple_size)
-        second_term = (kl + np.log((num_combinations + 1) / self.delta)) / (2 * num_tuples)
+        # # Second term: 1/(2⌊n/m⌋)[KL(q||p) + ln((C(n,m)+1)/δ)]
+        # num_tuples = np.trunc(self.n_bound / tuple_size)
+        # second_term = (kl + np.log((num_combinations + 1) / self.delta)) / (2 * num_tuples)
         
         # Outer f^kl: final risk certificate
         # R(q) ≤ f^kl(mc_upper_bound, second_term)
