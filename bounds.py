@@ -233,7 +233,7 @@ class PBBobj_Ntuple():
                 for _ in range(self.mc_samples):
                     # Call the adapted compute_losses function
                     # It returns the bounded loss, pseudo-accuracy, and embeddings
-                    loss, acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True)
+                    loss, acc, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True, sample=True)
                     
                     risk_mc_batch += loss
                     accuracy_mc_batch += acc
@@ -272,12 +272,12 @@ class PBBobj_Ntuple():
         # 3. Compute the empirical risk using your new compute_losses function.
         #    We set bounded=False here to get the raw loss for the bound calculation.
         #    The `compute_losses` function you provided already handles the network call.
-        empirical_risk, _, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=False)
+        empirical_risk, pseudo_accuracy, _ = self.compute_losses(net, batch, ntuple_loss_fn, bounded=True, sample=True)
 
-        # 4. Compute the PAC-Bayes bound using the N-tuple risk and actual tuple size.
+        # # 4. Compute the PAC-Bayes bound using the N-tuple risk and actual tuple size.
         bound = self.bound_exact(empirical_risk, kl, self.n_posterior, tuple_size)
 
-        return bound, kl / self.n_posterior, empirical_risk
+        return bound, kl / self.n_posterior, empirical_risk, pseudo_accuracy
     
     def compute_final_stats_risk_ntuple(self, net, data_loader, ntuple_loss_fn):
         """
