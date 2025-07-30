@@ -502,6 +502,9 @@ class ResNet(nn.Module):
       # return embeddings, logits
         
       # If using only N-tuple loss, just return the embeddings
+      # Normalize embeddings to be on the unit sphere
+      embeddings = F.normalize(embeddings, p=2, dim=1)
+
       return embeddings
 
 
@@ -747,6 +750,9 @@ class ProbResNet_BN(nn.Module):
         
         x = nn.AdaptiveAvgPool2d((1, 1))(x)
         embeddings = x.view(x.size(0), -1)
+        # Normalize embeddings to be on the unit sphere
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+
         return embeddings
 
     def compute_kl(self):
