@@ -179,6 +179,25 @@ class PBBobj_Ntuple():
             # For training, we directly use this as the penalty (no nested f^kl yet)
             # The full nested structure is used in compute_final_stats_risk_ntuple
             train_obj = empirical_risk + second_term
+
+        elif (self.objective == 'fquad'):
+            # This implements the f_quad objective with the stable "super-sample" penalty term.
+            # The complexity penalty term from the PAC-Bayes-quadratic bound derivation.
+            # Note the denominator is 2*k as per the f_quad formula.
+            # num_tuples = np.trunc(train_size / tuple_size)
+            # complexity_penalty = (kl + np.log(2 * np.sqrt(num_tuples) / self.delta)) / (2 * num_tuples)
+            # FIX: Use math and torch operations, not numpy, to keep everything in the computation graph.
+            kl = kl * self.kl_penalty
+            
+            num_tuples = math.trunc(train_size / tuple_size)
+           # Use torch.log and torch.sqrt
+            log_term = torch.log(2 * torch.sqrt(torch.tensor(num_tuples, device=self.device)) / self.delta)
+            complexity_penalty = (kl + log_term) / (2 * num_tuples)
+
+            # Ensure penalty is non-negative
+            complexity_penalty = torch.clamp(complexity_penalty, min=0)
+
+            train_obj = empirical_risk + torch.sqrt(complexity_penalty)
             
         else:
             raise RuntimeError(f'Wrong objective {self.objective}')
