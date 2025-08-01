@@ -166,7 +166,7 @@ class PBBobj_Ntuple():
         1. Inner f^kl handles Monte Carlo estimation error
         2. Outer f^kl handles the main PAC-Bayes bound
         """
-        if self.objective == 'fclassic':
+        if (self.objective == 'fclassic'):
             kl = kl * self.kl_penalty
             
             # Compute combinatorial term C(n,m) for N-tuple sampling
@@ -527,6 +527,3 @@ class PBBobj_Ntuple():
             warnings.append(f"⚠️ Very few tuples ({num_tuples}) - bounds may be very loose")
         
         return warnings
-
-
-
