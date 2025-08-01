@@ -90,18 +90,22 @@ class NTupleLoss(nn.Module):
             negative_ref = negative_embeds
 
             # L2 normalise the embeddings to ensure cosine similarity is used
-            anchor_embed = F.normalize(anchor_embed, p=2, dim=1)
-            positive_ref = F.normalize(positive_ref, p=2, dim=1)
-            negative_ref = F.normalize(negative_ref, p=2, dim=-1)
+            # anchor_norm = F.normalize(anchor_embed, p=2, dim=1)
+            # positive_norm = F.normalize(positive_ref, p=2, dim=1)
+            # negative_norm = F.normalize(negative_ref, p=2, dim=-1)
+
+            anchor_norm = anchor_embed
+            positive_norm = positive_ref
+            negative_norm = negative_ref
         
         # --- Calculate similarities ---
-        sim_positive = cosine_similarity(anchor_embed, positive_ref)
+        sim_positive = cosine_similarity(anchor_norm, positive_norm)
         
         # To calculate similarity between anchor and all negatives, we need to unsqueeze
         # the anchor to enable broadcasting across the N-2 dimension.
         # anchor_embed shape: (B, D) -> (B, 1, D)
         # negative_ref shape: (B, N-2, D)
-        sim_negatives = cosine_similarity(anchor_embed.unsqueeze(1), negative_ref, dim=2)
+        sim_negatives = cosine_similarity(anchor_norm.unsqueeze(1), negative_norm, dim=2)
         
         # --- Formulate as a classification problem ---
         # The goal is to classify the anchor as belonging to the positive reference
