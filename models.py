@@ -326,16 +326,17 @@ class ResProbConv2d(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, rho_prior, prior_dist='gaussian',
-                 device='cuda', stride=1, padding=1, dilation=1, init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
-        super().__init__()
+                 device='cuda', stride=1, padding=0, dilation=1, init_layer=None, bias=False):
+        super(ResProbConv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = (kernel_size, kernel_size)
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
         self.groups = 1
         self.bias = bias
+        self.device = device if torch.cuda.is_available() else 'cpu'
 
         # Compute and set sigma for the truncated gaussian of weights
         in_features = self.in_channels
@@ -357,9 +358,9 @@ class ResProbConv2d(nn.Module):
             raise RuntimeError(f'Wrong prior_dist {prior_dist}')
 
         self.weight = dist(weights_mu_init.clone(),
-                           weights_rho_init.clone(), device=device, fixed=False)
+                           weights_rho_init.clone(), device=self.device, fixed=False)
         self.weight_prior = dist(
-            weights_mu_prior.clone(), weights_rho_init.clone(), device=device, fixed=True)
+            weights_mu_prior.clone(), weights_rho_init.clone(), device=self.device, fixed=True)
         self.kl_div = 0
 
     def forward(self, input, sample=False):
@@ -471,46 +472,80 @@ class ProbResidualBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self):
+    def __init__(self, embedding_dim=256):
         super(ResNet, self).__init__()
-        resnet50_model = models.resnet50(pretrained=True)
+        # Load pre-trained ResNet50
+        resnet50_model = models.resnet50(weights='IMAGENET1K_V1')
+        
+        # Remove the final classification layer (fc)
         self.resnet50_model = nn.Sequential(*list(resnet50_model.children())[:-1])
-
-        # --- OPTIONAL: Add a classification head as per the paper ---
-        # This allows you to combine N-tuple loss with classification loss
-        # self.classifier = nn.Linear(2048, num_classes) # num_classes = number of IDs in train set
-
-        # self.fc1 = nn.Linear(2048, 2)
+        
+        # Add custom embedding layer for Re-ID
+        self.embedding_layer = nn.Sequential(
+            nn.Linear(2048, embedding_dim),
+            nn.BatchNorm1d(embedding_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(embedding_dim, embedding_dim)
+        )
 
     def forward_once(self, x):
-        out = self.resnet50_model(x)
-        out = out.view(out.size(0), -1)
-
-        return out
+        """Extract raw features from ResNet backbone"""
+        features = self.resnet50_model(x)
+        features = features.view(features.size(0), -1)
+        return features
 
     def forward(self, x):
-      """
-      ADAPTED FOR N-TUPLE: This forward pass now takes a single batch of
-      images and returns their feature embeddings.
-      """
-      # 1. Extract feature embeddings
-      features = self.resnet50_model(x)
-      embeddings = features.view(features.size(0), -1)
-
-      # 2. OPTIONAL: Get classification logits if you are using combined loss
-      # If you are only using N-tuple loss, you can comment this out.
-      # logits = self.classifier(embeddings)
-      # return embeddings, logits
+        """
+        ADAPTED FOR N-TUPLE: This forward pass now takes a single batch of
+        images and returns their feature embeddings.
+        """
+        # 1. Extract feature embeddings from backbone
+        features = self.resnet50_model(x)
+        raw_embeddings = features.view(features.size(0), -1)
         
-      # If using only N-tuple loss, just return the embeddings
-      # Normalize embeddings to be on the unit sphere
-      embeddings = F.normalize(embeddings, p=2, dim=1)
+        # 2. Pass through custom embedding layer
+        embeddings = self.embedding_layer(raw_embeddings)
+        
+        # 3. Normalize embeddings to be on the unit sphere
+        embeddings = F.normalize(embeddings, p=2, dim=1)
 
-      return embeddings
+        return embeddings
 
 
-def ResNet50_new():
-    return ResNet().to('cuda')
+class PretrainedResNetWrapper(nn.Module):
+    """Wrapper to make ResNet compatible with ProbResNet_bn initialization"""
+    def __init__(self, embedding_dim=2048):
+        super().__init__()
+        # Create ResNet model
+        self.model = ResNet(embedding_dim=embedding_dim)
+        
+        # Create the resnet50_model attribute that ProbResNet_BN expects
+        resnet50_base = models.resnet50(weights='IMAGENET1K_V1')
+        
+        # Store individual layers for ProbResNet initialization
+        self.resnet50_model = nn.ModuleList([
+            resnet50_base.conv1,      # Conv layer
+            resnet50_base.bn1,        # BatchNorm layer
+            resnet50_base.relu,       # ReLU activation
+            resnet50_base.maxpool,    # MaxPool layer
+            
+            resnet50_base.layer1,     # ResNet block 1
+            resnet50_base.layer2,     # ResNet block 2
+            resnet50_base.layer3,     # ResNet block 3
+            resnet50_base.layer4,     # ResNet block 4
+            
+            resnet50_base.avgpool,    # Average pooling
+        ])
+        
+    def forward(self, x):
+        return self.model(x)
+
+
+def ResNet50_new(embedding_dim=2048):
+    """Factory function to create ResNet with specified embedding dimension"""
+    return ResNet(embedding_dim=embedding_dim).to('cuda')
+
 
 class ProbResidualBlock_bn(nn.Module):
     def __init__(self, inchannel, outchannel, stride, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
