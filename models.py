@@ -215,6 +215,7 @@ class ResProbLinear(nn.Module):
 
     
 class ResProbBN(nn.Module):
+    """Implementation of a Probabilistic Batch Normalization layer."""
 
     def __init__(self, in_channels, rho_prior, prior_dist='gaussian',
                  device='cuda' , init_prior='weights', init_layer=None, init_layer_prior=None,bias=False):
