@@ -32,7 +32,7 @@ def run_ntuple_experiment(config):
     torch.manual_seed(7)
     np.random.seed(0)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
 
     loader_kargs = {'num_workers': config.get('num_workers', 4), 'pin_memory': True} if 'cuda' in device else {}
     rho_prior = math.log(math.exp(config['sigma_prior']) - 1.0)
