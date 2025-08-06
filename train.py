@@ -11,26 +11,201 @@ from torch.utils.data import DataLoader
 
 # Your existing imports
 from data import reid_data_prepare, ntuple_reid_data, DynamicNTupleDataset, loadbatches
-from models import ResNet, ProbResNet_BN, ProbBottleneckBlock
-from bounds import PBBobj_Ntuple
+from models import PretrainedResNetWrapper, ProbResNet_bn, ResNet, ProbResNet_BN, ProbBottleneckBlock
 from loss import NTupleLoss
-import torch.optim as optim
-import time
-import torch.nn.functional as F
+
+
+def compute_distance_matrix(anchor_features, gallery_features):
+    """
+    Compute cosine distance matrix between anchor and gallery features.
+    
+    Args:
+        anchor_features: (N_anchor, D) tensor of anchor embeddings
+        gallery_features: (N_gallery, D) tensor of gallery embeddings
+        
+    Returns:
+        distance_matrix: (N_anchor, N_gallery) tensor of cosine distances
+    """
+    # Normalize features
+    anchor_norm = F.normalize(anchor_features, p=2, dim=1)
+    gallery_norm = F.normalize(gallery_features, p=2, dim=1)
+    
+    # Compute cosine similarity and convert to distance
+    similarity_matrix = torch.mm(anchor_norm, gallery_norm.t())
+    distance_matrix = 1.0 - similarity_matrix  # Convert similarity to distance
+    
+    return distance_matrix
+
+
+def compute_map_and_rank1(distance_matrix, anchor_labels, gallery_labels):
+    """
+    Compute Mean Average Precision (mAP) and Rank-1 accuracy.
+    
+    Args:
+        distance_matrix: (N_anchor, N_gallery) tensor of distances
+        anchor_labels: (N_anchor,) tensor of anchor identity labels
+        gallery_labels: (N_gallery,) tensor of gallery identity labels
+        
+    Returns:
+        map_score: Mean Average Precision
+        rank1_acc: Rank-1 accuracy
+    """
+    num_anchors = distance_matrix.size(0)
+    num_gallery = distance_matrix.size(1)
+    
+    # Convert to numpy for easier processing
+    if torch.is_tensor(distance_matrix):
+        distance_matrix = distance_matrix.cpu().numpy()
+    if torch.is_tensor(anchor_labels):
+        anchor_labels = anchor_labels.cpu().numpy()
+    if torch.is_tensor(gallery_labels):
+        gallery_labels = gallery_labels.cpu().numpy()
+    
+    ap_scores = []
+    rank1_correct = 0
+    
+    for i in range(num_anchors):
+        # Get distances for this anchor
+        anchor_dists = distance_matrix[i]
+        anchor_label = anchor_labels[i]
+        
+        # Sort gallery items by distance (ascending)
+        sorted_indices = np.argsort(anchor_dists)
+        sorted_labels = gallery_labels[sorted_indices]
+        
+        # Create binary relevance vector (1 if same identity, 0 otherwise)
+        relevance = (sorted_labels == anchor_label).astype(int)
+        
+        # Skip if no relevant items
+        if relevance.sum() == 0:
+            continue
+        
+        # Compute Average Precision for this anchor
+        ap = compute_average_precision(relevance)
+        ap_scores.append(ap)
+        
+        # Check Rank-1 accuracy
+        if sorted_labels[0] == anchor_label:
+            rank1_correct += 1
+    
+    # Compute final metrics
+    map_score = np.mean(ap_scores) if ap_scores else 0.0
+    rank1_acc = rank1_correct / num_anchors
+    
+    return map_score, rank1_acc
+
+
+def compute_average_precision(relevance):
+    """
+    Compute Average Precision for a single query.
+    
+    Args:
+        relevance: Binary array indicating relevance (1 for relevant, 0 for irrelevant)
+        
+    Returns:
+        ap: Average Precision score
+    """
+    if relevance.sum() == 0:
+        return 0.0
+    
+    # Compute precision at each rank
+    cumsum_rel = np.cumsum(relevance)
+    precision_at_k = cumsum_rel / (np.arange(len(relevance)) + 1)
+    
+    # Average precision is the mean of precision values at relevant positions
+    ap = np.sum(precision_at_k * relevance) / relevance.sum()
+    
+    return ap
+
+
+def compute_simple_reid_metrics(anchor_embed, positive_embed, negative_embeds):
+    """
+    Compute simplified reid metrics using just the N-tuple structure.
+    Since we know anchor and positive should be closer than anchor and negatives,
+    we can compute a simplified rank-1 accuracy.
+    
+    Args:
+        anchor_embed: (B, D) anchor embeddings
+        positive_embed: (B, D) positive embeddings  
+        negative_embeds: (B, N-2, D) negative embeddings
+        
+    Returns:
+        rank1_acc: Simplified Rank-1 accuracy (how often positive is closest)
+        mean_pos_sim: Mean positive similarity
+        mean_neg_sim: Mean negative similarity
+    """
+    batch_size = anchor_embed.size(0)
+    
+    # Normalize embeddings
+    anchor_norm = F.normalize(anchor_embed, p=2, dim=1)
+    positive_norm = F.normalize(positive_embed, p=2, dim=1)
+    negative_norm = F.normalize(negative_embeds, p=2, dim=-1)
+    
+    # Compute similarities
+    sim_pos = F.cosine_similarity(anchor_norm, positive_norm)  # (B,)
+    sim_neg = F.cosine_similarity(anchor_norm.unsqueeze(1), negative_norm, dim=2)  # (B, N-2)
+    
+    # For each anchor, check if positive similarity is higher than all negative similarities
+    max_neg_sim, _ = torch.max(sim_neg, dim=1)  # (B,)
+    rank1_correct = (sim_pos > max_neg_sim).sum().item()
+    rank1_acc = rank1_correct / batch_size
+    
+    # Additional metrics
+    mean_pos_sim = sim_pos.mean().item()
+    mean_neg_sim = sim_neg.mean().item()
+    
+    return rank1_acc, mean_pos_sim, mean_neg_sim
+
+
+def update_priors_from_trained_network(prob_net, trained_net):
+    """
+    FIXED: Proper weight transfer from trained prior to ProbResNet
+    """
+    print("Attempting to transfer weights from trained prior to ProbResNet...")
+    try:
+        # Get state dicts
+        prior_state = trained_net.model.state_dict()  # From L2NormalizedModel wrapper
+        prob_state = prob_net.state_dict()
+        
+        # Transfer matching parameters
+        transferred_count = 0
+        for name, param in prior_state.items():
+            # Map to ProbResNet structure
+            prob_name = f"net.model.{name}"
+            if prob_name in prob_state and prob_state[prob_name].shape == param.shape:
+                prob_state[prob_name].copy_(param)
+                transferred_count += 1
+        
+        print(f"✅ Successfully transferred {transferred_count} parameters from prior to ProbResNet")
+        
+    except Exception as e:
+        print(f"⚠️ Weight transfer failed: {e}")
+        print("Using wrapper initialization only")
+
+
+# FIXED: Add embedding regularization class
+class EmbeddingRegularizer:
+    def __init__(self, min_var=1e-4):
+        self.min_var = min_var
+    
+    def __call__(self, embeddings):
+        """Add variance regularization to prevent collapse"""
+        # Compute variance along batch dimension
+        embedding_var = torch.var(embeddings, dim=0)
+        # Penalize low variance (encourages diversity)
+        var_loss = F.relu(self.min_var - embedding_var).mean()
+        return var_loss
 
 
 def run_ntuple_experiment(config):
     """
-    Experiment runner with proper PAC-Bayes methodology:
-    Stage 1: Train prior network on subset of data
-    Stage 2: Train posterior network with PAC-Bayes objective
+    FIXED: Experiment runner using your custom ResNet and ProbResNet models
+    with proper weight transfer and sample=False for stability
     """
     # --- 1. SETUP ---
     print("--- Starting Experiment ---")
     print(f"Config: {config}")
     device = config['device']
-    torch.manual_seed(7)
-    np.random.seed(0)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
@@ -62,30 +237,36 @@ def run_ntuple_experiment(config):
                                       samples_per_epoch_multiplier=config['samples_per_class'])
 
     # Create data loaders
-    from torch.utils.data import DataLoader
     prior_loader = DataLoader(prior_dataset, batch_size=config['batch_size'], shuffle=True, **loader_kargs)
     train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, **loader_kargs)
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, **loader_kargs)
     
     print("Data preparation complete.")
 
-    # --- 3. STAGE 1: TRAIN PRIOR NETWORK ---
-    print("\n--- Stage 1: Training Prior Network ---")
-    net0 = ResNet().to(device)
+    # --- 3. STAGE 1: TRAIN PRIOR NETWORK (USING YOUR CUSTOM RESNET) ---
+    print("\n--- Stage 1: Training Prior Network (Pre-trained ResNet50) ---")
+    
+    # FIXED: Use your custom ResNet class with pre-trained initialization (same as successful test)
+    embedding_dim = config.get('embedding_dim', 256)
+    net0 = ResNet(embedding_dim=embedding_dim).to(device)
+    print("✅ Using custom ResNet with pre-trained ResNet50 backbone (same as successful test)")
+
     # Train prior network on prior data subset
-    # Use Adam for prior training as N-tuple loss benefits from adaptive learning rates
     prior_optimizer = optim.Adam(net0.parameters(), 
                                 lr=config.get('learning_rate_prior', 3e-4), 
                                 weight_decay=5e-4)
     
-    ntuple_loss_fn = NTupleLoss(mode=config['ntuple_mode'], embedding_dim=2048).to(device)
+    ntuple_loss_fn = NTupleLoss(mode=config['ntuple_mode'], embedding_dim=embedding_dim).to(device)
     
-    print("Training prior network...")
+    print("Training pre-trained prior network...")
     for epoch in trange(config.get('prior_epochs', 20), desc="Prior Training"):
         net0.train()
         epoch_loss = 0
         num_batches = 0
         epoch_correct = 0
+        epoch_rank1_acc = 0
+        epoch_pos_sim = 0
+        epoch_neg_sim = 0
         
         for batch in tqdm(prior_loader, desc=f"Prior Epoch {epoch+1}", leave=False):
             try:
@@ -94,7 +275,7 @@ def run_ntuple_experiment(config):
                 
                 prior_optimizer.zero_grad()
                 
-                # Forward pass for all components
+                # Forward pass for all components (ResNet already includes L2 normalization)
                 anchor_embed = net0(anchor)
                 positive_embed = net0(positive)
                 
@@ -107,11 +288,18 @@ def run_ntuple_experiment(config):
                 # Compute N-tuple loss
                 loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
 
-                # compute pseudo-accuracy
+                # Compute metrics (embeddings are already normalized by ResNet)
                 sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
                 sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
                 max_sim_neg, _ = torch.max(sim_neg, dim=1)
                 epoch_correct += (sim_pos > max_sim_neg).sum().item()
+                
+                # Compute ReID metrics for prior training
+                rank1_acc, mean_pos_sim, mean_neg_sim = compute_simple_reid_metrics(
+                    anchor_embed, positive_embed, negative_embeds)
+                epoch_rank1_acc += rank1_acc
+                epoch_pos_sim += mean_pos_sim
+                epoch_neg_sim += mean_neg_sim
 
                 loss.backward()
                 
@@ -125,111 +313,151 @@ def run_ntuple_experiment(config):
                 print(f"Warning: Prior training batch failed: {e}")
                 continue
         
+        # FIXED: Added safety checks for division by zero
         avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
-        avg_acc  = epoch_correct / (num_batches * config['batch_size'])
+        avg_acc = epoch_correct / (num_batches * config['batch_size']) if num_batches > 0 else 0
+        avg_rank1 = epoch_rank1_acc / num_batches if num_batches > 0 else 0
+        avg_pos_sim = epoch_pos_sim / num_batches if num_batches > 0 else 0
+        avg_neg_sim = epoch_neg_sim / num_batches if num_batches > 0 else 0
 
         if epoch % 5 == 0:
-            print(f"Prior epoch {epoch}: avg loss={avg_loss:.4f}, pseudo-acc={avg_acc:.4f}")
+            print(f"Prior epoch {epoch}: loss={avg_loss:.4f}, pseudo-acc={avg_acc:.4f}, rank1={avg_rank1:.4f}, pos_sim={avg_pos_sim:.4f}, neg_sim={avg_neg_sim:.4f}")
     
-    print("Prior training completed!")
+    print("Pre-trained prior training completed!")
 
     # --- 4. STAGE 2: INITIALIZE POSTERIOR WITH TRAINED PRIOR ---
-    print("\n--- Stage 2: Initializing Posterior Network ---")
+    print("\n--- Stage 2: Initializing Posterior Network from Trained Prior ---")
     
-    # FIXED: Pass the ProbBottleneckBlock class as the first argument
-    net = ProbResNet_BN(ProbBottleneckBlock, rho_prior=rho_prior, init_net=net0, device=device).to(device)
+    # FIXED: Use PretrainedResNetWrapper initialized with the trained prior model
+    wrapped_prior = PretrainedResNetWrapper(embedding_dim=embedding_dim).to(device)
     
-    # Update priors to use trained network weights
+    # FIXED: Proper weight transfer using the trained prior
+    try:
+        print("Transferring weights from trained prior to wrapper...")
+        # Since both use the same ResNet backbone, we can transfer weights directly
+        prior_state = net0.state_dict()
+        wrapper_state = wrapped_prior.state_dict()
+        
+        # Map weights appropriately
+        transferred_keys = []
+        for key in prior_state:
+            wrapper_key = f"model.{key}"  # Add 'model.' prefix for wrapper
+            if wrapper_key in wrapper_state and prior_state[key].shape == wrapper_state[wrapper_key].shape:
+                wrapper_state[wrapper_key].copy_(prior_state[key])
+                transferred_keys.append(key)
+        
+        wrapped_prior.load_state_dict(wrapper_state)
+        print(f"✅ Successfully transferred {len(transferred_keys)} parameters from trained prior")
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not transfer weights: {e}")
+        print("Using default PretrainedResNetWrapper initialization")
+
+    # Create ProbResNet initialized from the trained prior
+    net = ProbResNet_bn(
+        rho_prior=rho_prior, 
+        init_net=wrapped_prior,
+        device=device
+    ).to(device)
+
+    # Enhanced prior update
     update_priors_from_trained_network(net, net0)
-    
-    # Use Adam for posterior training too - better for complex N-tuple loss
+    print("✅ ProbResNet initialized from trained prior")
+
+    # FIXED: Use lower learning rate for stability with embedding regularization
     optimizer = optim.Adam(net.parameters(), 
-                          lr=config['learning_rate'], 
-                          weight_decay=config.get('weight_decay', 5e-4))
-    
+                          lr=1e-6,  # Much lower learning rate to prevent collapse
+                          weight_decay=1e-3)  # Higher weight decay for regularization
+
     # Add learning rate scheduler for better training stability
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.8)
+    
+    # FIXED: Add embedding regularizer to prevent collapse
+    embedding_regularizer = EmbeddingRegularizer(min_var=1e-3)
 
-    # --- 5. SETUP FOR PAC-BAYES ---
-    print("\n--- Setting up PAC-Bayes Objective ---")
-    # CRITICAL: For PAC-Bayes theory, we need actual number of samples,
-    # not just dataset length which might be dynamic
-    posterior_n_size = len(train_dataset) * config['samples_per_class']  # Actual samples used
-    bound_n_size = len(val_dataset) * config['samples_per_class']      # Actual samples for bounds
-    
-    print(f"PAC-Bayes setup: posterior_n={posterior_n_size}, bound_n={bound_n_size}")
-    
-    pbobj = PBBobj_Ntuple(
-        objective=config['objective'],
-        delta=config['delta'],
-        delta_test=config['delta_test'],
-        mc_samples=config['mc_samples'],
-        kl_penalty=config['kl_penalty'],
-        device=device,
-        n_posterior=posterior_n_size,
-        n_bound=bound_n_size
-    )
+    # --- 5. DIRECT N-TUPLE TRAINING SETUP ---
+    print("\n--- Setting up Pure N-tuple Training with Pre-trained Base ---")
+    print("Training probabilistic model ONLY on N-tuple loss with sample=False")
+    print("Using weight decay, gradient clipping, and variance regularization for stability")
 
-    # --- THEORETICAL VALIDATION CHECKS ---
-    print("\n--- PAC-Bayes Theoretical Validation ---")
-    
-    # Check N-tuple size consistency
-    sample_batch = next(iter(train_loader))
-    actual_tuple_size = pbobj.get_tuple_size(sample_batch)
-    expected_tuple_size = config['N']
-    
-    if actual_tuple_size != expected_tuple_size:
-        print(f"⚠️ WARNING: Tuple size mismatch! Expected: {expected_tuple_size}, Got: {actual_tuple_size}")
-        print("This will invalidate PAC-Bayes bounds!")
-    else:
-        print(f"✅ N-tuple size consistent: {actual_tuple_size}")
-    
-    # Validate data splits
-    total_classes = len(all_class_ids)
-    prior_ratio = len(prior_ids) / total_classes
-    train_ratio = len(train_ids) / total_classes
-    val_ratio = len(val_ids) / total_classes
-    
-    print(f"Data split ratios - Prior: {prior_ratio:.2f}, Train: {train_ratio:.2f}, Val: {val_ratio:.2f}")
-    
-    # Run theoretical validation
-    warnings = pbobj.validate_pac_bayes_theory(actual_tuple_size, posterior_n_size)
-    for warning in warnings:
-        print(f"  {warning}")
-    
-    if not warnings:
-        print("✅ All PAC-Bayes theoretical checks passed!")
-
-    # --- 6. MAIN PAC-BAYES TRAINING LOOP ---
-    print("\n--- Stage 2: PAC-Bayes Training ---")
+    # --- 6. MAIN DIRECT N-TUPLE TRAINING LOOP ---
+    print("\n--- Stage 2: Direct N-tuple Training ---")
     results = {}
-    for epoch in trange(config['train_epochs'], desc="PAC-Bayes Training Progress"):
+    
+    for epoch in trange(config['train_epochs'], desc="N-tuple Training Progress"):
         net.train()
-        epoch_bounds = []
-        epoch_kls = []
-        epoch_emp_risks = []
+        epoch_losses = []
+        epoch_ntuple_losses = []
+        epoch_var_losses = []
+        epoch_acc = []
+        epoch_rank1 = []
+        epoch_pos_sim = []
+        epoch_neg_sim = []
         
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
             try:
+                anchor, positive, negatives = batch
+                anchor, positive, negatives = anchor.to(device), positive.to(device), negatives.to(device)
+                
                 optimizer.zero_grad()
-                bound, kl_scaled, emp_risk = pbobj.train_obj_ntuple(net, batch, ntuple_loss_fn)
+                
+                # FIXED: Forward pass using sample=False (deterministic posterior mean)
+                all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
+                all_embeddings = net(all_images, sample=False)  # Use posterior mean for stability
+                
+                # Unpack embeddings
+                batch_size = anchor.shape[0]
+                n_negatives = negatives.shape[1]
+                anchor_embed = all_embeddings[0:batch_size]
+                positive_embed = all_embeddings[batch_size : batch_size * 2]
+                negative_embeds = all_embeddings[batch_size * 2 :].view(batch_size, n_negatives, -1)
+                
+                # FIXED: Add embedding variance regularization to prevent collapse
+                all_embeddings_flat = torch.cat([anchor_embed, positive_embed, negative_embeds.view(-1, negative_embeds.shape[-1])], dim=0)
+                var_loss = embedding_regularizer(all_embeddings_flat)
+                
+                # Compute N-tuple loss
+                ntuple_loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
+                
+                # FIXED: Combined loss with variance regularization
+                total_loss = ntuple_loss + 0.1 * var_loss
                 
                 # Check for numerical issues
-                if torch.isnan(bound) or torch.isinf(bound):
+                if torch.isnan(total_loss) or torch.isinf(total_loss):
                     print(f"⚠️ NaN/Inf detected at epoch {epoch+1}, skipping batch")
                     continue
                 
-                bound.backward()
+                # Monitor for extremely large losses
+                if total_loss.item() > 1000:
+                    print(f"⚠️ Very large loss: {total_loss.item():.2f}")
                 
-                # Add gradient clipping for stability
-                torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+                total_loss.backward()
+                
+                # Gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=0.5)  # Lower clip norm
                 
                 optimizer.step()
                 
+                # Compute metrics for monitoring (no re-normalization needed)
+                with torch.no_grad():
+                    sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+                    sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+                    max_sim_neg, _ = torch.max(sim_neg, dim=1)
+                    correct_predictions = (sim_pos > max_sim_neg).sum().item()
+                    pseudo_accuracy = correct_predictions / batch_size
+                    
+                    # Compute ReID metrics
+                    rank1_acc, mean_pos_sim, mean_neg_sim = compute_simple_reid_metrics(
+                        anchor_embed, positive_embed, negative_embeds)
+                
                 # Track metrics
-                epoch_bounds.append(bound.item())
-                epoch_kls.append(kl_scaled.item() if torch.is_tensor(kl_scaled) else kl_scaled)
-                epoch_emp_risks.append(emp_risk.item() if torch.is_tensor(emp_risk) else emp_risk)
+                epoch_losses.append(total_loss.item())
+                epoch_ntuple_losses.append(ntuple_loss.item())
+                epoch_var_losses.append(var_loss.item())
+                epoch_acc.append(pseudo_accuracy)
+                epoch_rank1.append(rank1_acc)
+                epoch_pos_sim.append(mean_pos_sim)
+                epoch_neg_sim.append(mean_neg_sim)
                 
             except Exception as e:
                 print(f"Warning: Training batch failed: {e}")
@@ -238,149 +466,296 @@ def run_ntuple_experiment(config):
         # Step the learning rate scheduler
         scheduler.step()
 
-        # --- 7. COMPREHENSIVE EVALUATION ---
+        # --- 7. EVALUATION AND MONITORING ---
         if (epoch + 1) % config['test_interval'] == 0:
             print(f"\n--- Evaluating at Epoch {epoch+1} ---")
             
             # Calculate averages for this epoch
-            avg_bound = np.mean(epoch_bounds) if epoch_bounds else float('inf')
-            avg_kl = np.mean(epoch_kls) if epoch_kls else 0.0
-            avg_emp_risk = np.mean(epoch_emp_risks) if epoch_emp_risks else 0.0
+            avg_loss = np.mean(epoch_losses) if epoch_losses else float('inf')
+            avg_ntuple_loss = np.mean(epoch_ntuple_losses) if epoch_ntuple_losses else float('inf')
+            avg_var_loss = np.mean(epoch_var_losses) if epoch_var_losses else 0.0
+            avg_acc = np.mean(epoch_acc) if epoch_acc else 0.0
+            avg_rank1 = np.mean(epoch_rank1) if epoch_rank1 else 0.0
+            avg_pos_sim = np.mean(epoch_pos_sim) if epoch_pos_sim else 0.0
+            avg_neg_sim = np.mean(epoch_neg_sim) if epoch_neg_sim else 0.0
             
-            try:
-                # Compute risk certificates using validation set
-                final_risk, kl_div, emp_risk_val, pseudo_acc = pbobj.compute_final_stats_risk_ntuple(
-                    net, val_loader, ntuple_loss_fn)
-                
-                # Multiple inference modes for comprehensive evaluation
-                stch_risk, stch_acc = pbobj.test_stochastic_ntuple(net, val_loader, ntuple_loss_fn)
-                post_risk, post_acc = pbobj.test_posterior_mean_ntuple(net, val_loader, ntuple_loss_fn)
-                ens_risk, ens_acc = pbobj.test_ensemble_ntuple(net, val_loader, ntuple_loss_fn, num_samples=10)
-                
-                results[epoch+1] = {
-                    'train_bound': avg_bound,
-                    'train_kl': avg_kl,
-                    'train_emp_risk': avg_emp_risk,
-                    'certified_risk': final_risk,
-                    'kl_divergence': kl_div,
-                    'empirical_risk': emp_risk_val,
-                    'pseudo_accuracy': pseudo_acc,
-                    'stochastic_risk': stch_risk,
-                    'stochastic_accuracy': stch_acc,
-                    'posterior_mean_risk': post_risk,
-                    'posterior_mean_accuracy': post_acc,
-                    'ensemble_risk': ens_risk,
-                    'ensemble_accuracy': ens_acc,
-                    'learning_rate': scheduler.get_last_lr()[0]
-                }
-                
-                print(f"  Train Bound: {avg_bound:.5f}")
-                print(f"  Train KL: {avg_kl:.3f}")
-                print(f"  Certified Risk: {final_risk:.5f}")
-                print(f"  KL Divergence: {kl_div:.5f}")
-                print(f"  Pseudo-Accuracy: {pseudo_acc:.4f}")
-                print(f"  Stochastic Accuracy: {stch_acc:.4f}")
-                print(f"  Posterior Mean Accuracy: {post_acc:.4f}")
-                print(f"  Ensemble Accuracy: {ens_acc:.4f}")
-                
-                # PAC-Bayes bound tightness analysis
-                bound_gap = final_risk - emp_risk_val
-                print(f"  Bound Gap: {bound_gap:.5f}")
-                
-                # Enhanced bound analysis for your custom bounds
-                if bound_gap < 0:
-                    print("  ⚠️ CRITICAL: Negative bound gap - bounds are invalid!")
-                elif bound_gap > 0.8:
-                    print("  ⚠️ Very loose bounds - consider increasing MC samples or adjusting δ")
-                elif bound_gap > 0.5:
-                    print("  ⚠️ Loose bounds - your nested structure may need tuning")
-                elif bound_gap < 0.2:
-                    print("  ✅ Tight bounds - excellent for custom nested structure!")
-                else:
-                    print("  ✅ Reasonably tight bounds!")
-                
-                # Specific recommendations for your custom bounds
-                if bound_gap > 0.6 and config['mc_samples'] < 200:
-                    print("  💡 Try increasing mc_samples for tighter inner bound")
-                if bound_gap > 0.7 and config['delta'] > 0.01:
-                    print("  💡 Consider lowering delta for tighter outer bound")
-                
-                # Performance warnings
-                if avg_kl > 50000:
-                    print("  ⚠️ Very high KL divergence - consider reducing kl_penalty")
-                elif final_risk > 0.99:
-                    print("  ⚠️ Very loose bounds - bounds may not be meaningful")
-                elif pseudo_acc > 0.4:
-                    print("  ✅ Good progress!")
-                    
-            except Exception as e:
-                print(f"Warning: Evaluation failed: {e}")
-                continue
+            # Evaluate on validation set
+            net.eval()
+            val_losses = []
+            val_acc = []
+            val_rank1 = []
+            val_pos_sim = []
+            val_neg_sim = []
+            
+            with torch.no_grad():
+                for batch in tqdm(val_loader, desc="Validation", leave=False):
+                    try:
+                        anchor, positive, negatives = batch
+                        anchor, positive, negatives = anchor.to(device), positive.to(device), negatives.to(device)
+                        
+                        # FIXED: Forward pass with sample=False for validation
+                        all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
+                        all_embeddings = net(all_images, sample=False)  # Deterministic for validation
+                        
+                        # Unpack embeddings
+                        batch_size = anchor.shape[0]
+                        n_negatives = negatives.shape[1]
+                        anchor_embed = all_embeddings[0:batch_size]
+                        positive_embed = all_embeddings[batch_size : batch_size * 2]
+                        negative_embeds = all_embeddings[batch_size * 2 :].view(batch_size, n_negatives, -1)
+                        
+                        # Compute validation loss
+                        val_loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
+                        
+                        # Compute validation metrics (no re-normalization needed)
+                        sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+                        sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+                        max_sim_neg, _ = torch.max(sim_neg, dim=1)
+                        correct_predictions = (sim_pos > max_sim_neg).sum().item()
+                        pseudo_accuracy = correct_predictions / batch_size
+                        
+                        # Compute ReID metrics for validation
+                        rank1_acc, mean_pos_sim, mean_neg_sim = compute_simple_reid_metrics(
+                            anchor_embed, positive_embed, negative_embeds)
+                        
+                        val_losses.append(val_loss.item())
+                        val_acc.append(pseudo_accuracy)
+                        val_rank1.append(rank1_acc)
+                        val_pos_sim.append(mean_pos_sim)
+                        val_neg_sim.append(mean_neg_sim)
+                        
+                    except Exception as e:
+                        print(f"Warning: Validation batch failed: {e}")
+                        continue
+            
+            # Calculate validation metrics
+            avg_val_loss = np.mean(val_losses) if val_losses else float('inf')
+            avg_val_acc = np.mean(val_acc) if val_acc else 0.0
+            avg_val_rank1 = np.mean(val_rank1) if val_rank1 else 0.0
+            avg_val_pos_sim = np.mean(val_pos_sim) if val_pos_sim else 0.0
+            avg_val_neg_sim = np.mean(val_neg_sim) if val_neg_sim else 0.0
+            
+            results[epoch+1] = {
+                'train_loss': avg_loss,
+                'train_ntuple_loss': avg_ntuple_loss,
+                'train_var_loss': avg_var_loss,
+                'train_accuracy': avg_acc,
+                'train_rank1': avg_rank1,
+                'train_pos_sim': avg_pos_sim,
+                'train_neg_sim': avg_neg_sim,
+                'val_loss': avg_val_loss,
+                'val_accuracy': avg_val_acc,
+                'val_rank1': avg_val_rank1,
+                'val_pos_sim': avg_val_pos_sim,
+                'val_neg_sim': avg_val_neg_sim,
+                'learning_rate': scheduler.get_last_lr()[0]
+            }
+            
+            print(f"  N-tuple Loss: {avg_ntuple_loss:.5f}")
+            print(f"  Variance Loss: {avg_var_loss:.5f}")
+            print(f"  Train Pseudo-Accuracy: {avg_acc:.4f}")
+            print(f"  Train Rank-1: {avg_rank1:.4f}")
+            print(f"  Train Pos Sim: {avg_pos_sim:.4f}")
+            print(f"  Train Neg Sim: {avg_neg_sim:.4f}")
+            print(f"  Val Loss: {avg_val_loss:.5f}")
+            print(f"  Val Pseudo-Accuracy: {avg_val_acc:.4f}")
+            print(f"  Val Rank-1: {avg_val_rank1:.4f}")
+            print(f"  Val Pos Sim: {avg_val_pos_sim:.4f}")
+            print(f"  Val Neg Sim: {avg_val_neg_sim:.4f}")
+            print(f"  Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+            
+            # Performance monitoring
+            if avg_val_rank1 > 0.8:
+                print("  ✅ Excellent ReID performance!")
+            elif avg_val_rank1 > 0.6:
+                print("  ✅ Good ReID performance!")
+            elif avg_val_rank1 < 0.3 and epoch > 20:
+                print("  ⚠️ Low Rank-1 accuracy - consider adjusting learning rate or N-tuple loss mode")
+            
+            # FIXED: Enhanced similarity analysis
+            sim_gap = avg_val_pos_sim - avg_val_neg_sim
+            if sim_gap > 0.3:
+                print(f"  ✅ Good similarity separation: {sim_gap:.3f}")
+            elif sim_gap > 0.1:
+                print(f"  🔶 Moderate similarity separation: {sim_gap:.3f}")
+            elif sim_gap > 0.01:
+                print(f"  ⚠️ Poor similarity separation: {sim_gap:.3f}")
+            else:
+                print(f"  🚨 No similarity separation: {sim_gap:.6f} - embeddings may be collapsing!")
+            
+            net.train()  # Set back to training mode
 
     print("\n--- Training Finished ---")
+    
+    # --- FINAL MODEL EVALUATION ---
+    print("\n--- Final Model Evaluation ---")
+    
+    # Test with different inference modes
+    final_results = evaluate_trained_model(net, val_loader, ntuple_loss_fn, device)
+    results['final_evaluation'] = final_results
+    
     return results
 
 
-def update_priors_from_trained_network(prob_net, trained_net):
+def evaluate_trained_model(net, test_loader, ntuple_loss_fn, device):
     """
-    Update the prior parameters in the probabilistic network to match 
-    the trained deterministic network.
+    FIXED: Comprehensive evaluation using sample=False and sample=True modes
     """
-    print("Updating priors from trained network...")
+    print("Evaluating trained model with different inference modes...")
     
-    try:
-        # Get state dict from trained network
-        trained_state = trained_net.state_dict()
-        
-        # Update priors in probabilistic network
-        with torch.no_grad():
-            for name, module in prob_net.named_modules():
-                if hasattr(module, 'weight_prior') and hasattr(module, 'bias_prior'):
-                    # Find corresponding layer in trained network
-                    # Remove 'prob_' prefix if it exists
-                    base_name = name.replace('prob_', '')
-                    
-                    # Update weight and bias priors
-                    for param_name in ['weight', 'bias']:
-                        trained_key = f"{base_name}.{param_name}"
-                        if trained_key in trained_state:
-                            prior_param = getattr(module, f"{param_name}_prior")
-                            if hasattr(prior_param, 'mu'):
-                                prior_param.mu.data.copy_(trained_state[trained_key])
-                                print(f"Updated {name}.{param_name}_prior from {trained_key}")
-        
-        print("Prior update completed!")
-        
-    except Exception as e:
-        print(f"Warning: Could not update all priors: {e}")
-        print("Continuing with default prior initialization...")
+    results = {}
+    
+    # 1. Posterior Mean Evaluation (Deterministic)
+    print("  - Posterior Mean (sample=False) Evaluation")
+    net.eval()
+    post_losses = []
+    post_acc = []
+    post_rank1 = []
+    post_pos_sim = []
+    post_neg_sim = []
+    
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Posterior Mean", leave=False):
+            try:
+                anchor, positive, negatives = batch
+                anchor, positive, negatives = anchor.to(device), positive.to(device), negatives.to(device)
+                
+                # Forward pass with posterior mean (sample=False)
+                all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
+                all_embeddings = net(all_images, sample=False)
+                
+                # Unpack embeddings
+                batch_size = anchor.shape[0]
+                n_negatives = negatives.shape[1]
+                anchor_embed = all_embeddings[0:batch_size]
+                positive_embed = all_embeddings[batch_size : batch_size * 2]
+                negative_embeds = all_embeddings[batch_size * 2 :].view(batch_size, n_negatives, -1)
+                
+                # Compute loss
+                loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
+                
+                # Compute metrics (embeddings already normalized)
+                sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+                sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+                max_sim_neg, _ = torch.max(sim_neg, dim=1)
+                correct_predictions = (sim_pos > max_sim_neg).sum().item()
+                accuracy = correct_predictions / batch_size
+                
+                # Compute ReID metrics
+                rank1_acc, mean_pos_sim, mean_neg_sim = compute_simple_reid_metrics(
+                    anchor_embed, positive_embed, negative_embeds)
+                
+                post_losses.append(loss.item())
+                post_acc.append(accuracy)
+                post_rank1.append(rank1_acc)
+                post_pos_sim.append(mean_pos_sim)
+                post_neg_sim.append(mean_neg_sim)
+                
+            except Exception as e:
+                print(f"Warning: Posterior mean batch failed: {e}")
+                continue
+    
+    results['posterior_mean'] = {
+        'loss': np.mean(post_losses) if post_losses else float('inf'),
+        'accuracy': np.mean(post_acc) if post_acc else 0.0,
+        'rank1': np.mean(post_rank1) if post_rank1 else 0.0,
+        'pos_sim': np.mean(post_pos_sim) if post_pos_sim else 0.0,
+        'neg_sim': np.mean(post_neg_sim) if post_neg_sim else 0.0
+    }
+    
+    # 2. Stochastic Evaluation (sample=True)
+    print("  - Stochastic (sample=True) Evaluation")
+    stoch_losses = []
+    stoch_acc = []
+    stoch_rank1 = []
+    stoch_pos_sim = []
+    stoch_neg_sim = []
+    
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Stochastic", leave=False):
+            try:
+                anchor, positive, negatives = batch
+                anchor, positive, negatives = anchor.to(device), positive.to(device), negatives.to(device)
+                
+                # Forward pass with sampling (sample=True)
+                all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
+                all_embeddings = net(all_images, sample=True)
+                
+                # Unpack embeddings
+                batch_size = anchor.shape[0]
+                n_negatives = negatives.shape[1]
+                anchor_embed = all_embeddings[0:batch_size]
+                positive_embed = all_embeddings[batch_size : batch_size * 2]
+                negative_embeds = all_embeddings[batch_size * 2 :].view(batch_size, n_negatives, -1)
+                
+                # Compute loss
+                loss = ntuple_loss_fn(anchor_embed, positive_embed, negative_embeds)
+                
+                # Compute metrics (embeddings already normalized)
+                sim_pos = F.cosine_similarity(anchor_embed, positive_embed)
+                sim_neg = F.cosine_similarity(anchor_embed.unsqueeze(1), negative_embeds, dim=2)
+                max_sim_neg, _ = torch.max(sim_neg, dim=1)
+                correct_predictions = (sim_pos > max_sim_neg).sum().item()
+                accuracy = correct_predictions / batch_size
+                
+                # Compute ReID metrics
+                rank1_acc, mean_pos_sim, mean_neg_sim = compute_simple_reid_metrics(
+                    anchor_embed, positive_embed, negative_embeds)
+                
+                stoch_losses.append(loss.item())
+                stoch_acc.append(accuracy)
+                stoch_rank1.append(rank1_acc)
+                stoch_pos_sim.append(mean_pos_sim)
+                stoch_neg_sim.append(mean_neg_sim)
+                
+            except Exception as e:
+                print(f"Warning: Stochastic batch failed: {e}")
+                continue
+    
+    results['stochastic'] = {
+        'loss': np.mean(stoch_losses) if stoch_losses else float('inf'),
+        'accuracy': np.mean(stoch_acc) if stoch_acc else 0.0,
+        'rank1': np.mean(stoch_rank1) if stoch_rank1 else 0.0,
+        'pos_sim': np.mean(stoch_pos_sim) if stoch_pos_sim else 0.0,
+        'neg_sim': np.mean(stoch_neg_sim) if stoch_neg_sim else 0.0
+    }
+    
+    # Print final results
+    print(f"\n--- Final Evaluation Results ---")
+    print(f"Posterior Mean (sample=False) - Loss: {results['posterior_mean']['loss']:.5f}, Accuracy: {results['posterior_mean']['accuracy']:.4f}, Rank-1: {results['posterior_mean']['rank1']:.4f}")
+    print(f"Stochastic (sample=True)      - Loss: {results['stochastic']['loss']:.5f}, Accuracy: {results['stochastic']['accuracy']:.4f}, Rank-1: {results['stochastic']['rank1']:.4f}")
+    
+    print(f"\n--- Similarity Analysis ---")
+    for mode in ['posterior_mean', 'stochastic']:
+        pos_sim = results[mode]['pos_sim']
+        neg_sim = results[mode]['neg_sim']
+        sim_gap = pos_sim - neg_sim
+        print(f"{mode.capitalize():15} - Pos Sim: {pos_sim:.4f}, Neg Sim: {neg_sim:.4f}, Gap: {sim_gap:.4f}")
+    
+    return results
 
 
 if __name__ == '__main__':
-    # --- Configuration ---
+    # --- FIXED Configuration ---
     config = {
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-        'data_list_path': '/Users/misanmeggison/Downloads/cukh03/cuhk03/train.txt',
-        'data_dir_path': '/Users/misanmeggison/Downloads/cukh03/cuhk03/images_labeled/',
+        'data_list_path': 'ntuple-contrastive-learning/cuhk03/train.txt',
+        'data_dir_path': 'ntuple-contrastive-learning/archive/images_labeled/',
         'val_perc': 0.2,
-        'perc_prior': 0.2,  # Percentage of data for prior training
+        'perc_prior': 0.2,
         'batch_size': 64,
-        'learning_rate': 1e-4,  # Good for Adam with PAC-Bayes
-        'learning_rate_prior': 3e-4,  # Adam-friendly LR for prior training
-        'weight_decay': 5e-4,
-        'sigma_prior': 0.5,
+        'learning_rate': 1e-6,  # FIXED: Much lower learning rate
+        'learning_rate_prior': 3e-4,
+        'weight_decay': 1e-3,  # FIXED: Higher weight decay
+        'sigma_prior': 0.1,
         'train_epochs': 100,
-        'prior_epochs': 20,  # Epochs for prior training
-        'test_interval': 10,
-        'objective': 'fclassic',
-        'delta': 0.01,
-        'delta_test': 0.05,
-        'mc_samples': 100,
-        'kl_penalty': 0.001,  # Good starting point for N-tuple loss
-        'N': 4, # Number of samples in each N-tuple
+        'prior_epochs': 15,
+        'test_interval': 5,
+        'N': 4,
         'samples_per_class': 4,
-        'ntuple_mode': 'regular',  # 'regular' or 'mpn'
-        'num_workers': 0  # Set to 0 for notebook compatibility
+        'ntuple_mode': 'regular',
+        'num_workers': 4,
+        'embedding_dim': 256
     }
 
     # --- Run Experiment with Timer ---

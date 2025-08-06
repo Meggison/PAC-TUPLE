@@ -7,7 +7,7 @@ import torch.optim as optim
 import torch.distributions as td
 from tqdm import tqdm, trange
 
-from problayers import Gaussian, Laplace, trunc_normal_
+from probdist import Gaussian, Laplace, trunc_normal_
 
 class Linear(nn.Module):
     """Implementation of a Linear layer (reimplemented to use
@@ -124,7 +124,6 @@ class ProbLinear(nn.Module):
 
         return F.linear(input, weight, bias)
 
-
 class ProbConv2d(nn.Module):
     """Implementation of a Probabilistic Convolutional layer."""
 
@@ -152,10 +151,12 @@ class ProbConv2d(nn.Module):
             weights_mu_init = init_layer.weight
             bias_mu_init = init_layer.bias
         else:
+            # CORRECT SHAPE for convolution!
             weights_mu_init = trunc_normal_(torch.Tensor(
-                out_channels, in_features), 0, sigma_weights, -2*sigma_weights, 2*sigma_weights)
-            bias_mu_init = torch.zeros(out_channels)
+        out_channels, in_channels, kernel_size, kernel_size), 
+        0, sigma_weights, -2*sigma_weights, 2*sigma_weights)
 
+            bias_mu_init = torch.zeros(out_channels)
 
         # set scale parameters
         weight_rho_init = torch.ones(
@@ -206,6 +207,7 @@ class ProbConv2d(nn.Module):
         
         self.kl_div = 0
         
+
     def forward(self, input, sample=False):
         if self.training or sample:
             # during training we sample from the model distribution
@@ -225,3 +227,5 @@ class ProbConv2d(nn.Module):
             # compute the KL divergence term
             self.kl_div = self.weight.compute_kl(
                 self.weight_prior) + self.bias.compute_kl(self.bias_prior)
+            
+        return F.conv2d(input, weight, bias, self.stride, self.padding, self.dilation, self.groups)

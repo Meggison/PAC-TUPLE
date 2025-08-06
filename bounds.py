@@ -70,23 +70,11 @@ class PBBobj_Ntuple():
         self.n_bound = n_bound
         
     def get_tuple_size(self, batch):
-        """
-        Extract the actual tuple size (N) from a batch.
-        
-        IMPORTANT: For PAC-Bayes theory to be valid, this must match
-        the combinatorial term in the bound computation.
-        
-        Args:
-            batch: Tuple of (anchor, positive, negatives)
-            
-        Returns:
-            int: The tuple size N = 1 (anchor) + 1 (positive) + num_negatives
-        """
+        """Extract the tuple size from the batch."""
         _, _, negatives = batch  # ignore anchor and positive
         num_negatives = negatives.shape[1]  # N-2 in your notation
         tuple_size = 1 + 1 + num_negatives  # anchor + positive + negatives = N
         
-        # CRITICAL: Ensure this matches your dataset's N parameter
         # If your DynamicNTupleDataset uses N=4, this should return 4
         return tuple_size
         
@@ -99,8 +87,6 @@ class PBBobj_Ntuple():
         negatives = negatives.to(self.device)
         
         # 2. Get embeddings and classification logits from the network
-        # Your model's forward pass should be updated to return both
-        # e.g., `return embeddings, logits`
         all_images = torch.cat([anchor, positive, negatives.view(-1, *anchor.shape[1:])], dim=0)
         all_embeddings = net(all_images, sample=sample)
 
