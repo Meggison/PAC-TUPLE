@@ -93,9 +93,11 @@ class Gaussian(nn.Module):
         term2 = torch.div(
             torch.pow(self.mu - other.mu, 2), var_other)
         term3 = torch.div(var_self, var_other)
-        kl_div = (torch.mul(term1 + term2 + term3 - 1, 0.5)).mean() # may switch to mean later
+        kl_div = (torch.mul(term1 + term2 + term3 - 1, 0.5)).sum() # may switch to mean later
+        num_parameters = self.mu.numel()
+        kl_norm = kl_div / num_parameters
 
-        return kl_div
+        return kl_norm
     
 
 class Laplace(nn.Module):
