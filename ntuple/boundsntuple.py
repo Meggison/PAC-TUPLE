@@ -123,15 +123,16 @@ class PBBobj_NTuple():
     def bound(self, empirical_risk, kl, train_size, tuple_size=None, lambda_var=None):
         kl = kl * self.kl_penalty
         delta = self.delta
-        # First, ensure empirical_risk is a tensor
+        
+        # Ensure empirical_risk is a tensor with gradients
         if not torch.is_tensor(empirical_risk):
-             # Default to float32 and CPU if you can't infer from anything else
-            empirical_risk = torch.tensor(empirical_risk, dtype=torch.float32)
-        log_term = torch.tensor(
-            np.log((2 * np.sqrt(train_size)) / delta),
-            dtype=empirical_risk.dtype,
-            device=empirical_risk.device)
-
+            empirical_risk = torch.tensor(empirical_risk, dtype=torch.float32, requires_grad=True)
+        
+        # ✅ Use torch operations to preserve gradients
+        log_term = torch.log(torch.tensor(
+            2 * torch.sqrt(torch.tensor(train_size, dtype=torch.float32)) / delta,
+            dtype=empirical_risk.dtype, device=empirical_risk.device))
+    
         if self.objective == 'fquad':
             term = (kl + log_term) / (2 * train_size)
             part1 = torch.sqrt(empirical_risk + term)
@@ -144,56 +145,51 @@ class PBBobj_NTuple():
         
         elif self.objective == 'ntuple':
             if tuple_size is not None and tuple_size <= self.n_bound:
-                # Use loggamma for numerical stability with large combinations
-                combinations = math.exp(math.lgamma(self.n_bound + 1) - math.lgamma(tuple_size + 1) - math.lgamma(self.n_bound - tuple_size + 1))
+                log_combinations = (torch.lgamma(torch.tensor(self.n_bound + 1, dtype=torch.float32)) - 
+                                  torch.lgamma(torch.tensor(tuple_size + 1, dtype=torch.float32)) - 
+                                  torch.lgamma(torch.tensor(self.n_bound - tuple_size + 1, dtype=torch.float32)))
+                combinations = torch.exp(log_combinations)
             else:
-                # Fallback (potentially unsafe for very large exponents)
-                combinations = float(self.n_bound ** tuple_size if tuple_size else 1)
-            kl_ratio = (kl + np.log(combinations / delta)) / max(1, np.trunc(train_size / (tuple_size if tuple_size else 1)))
-            kl_ratio_tensor = torch.as_tensor(kl_ratio, dtype=empirical_risk.dtype, device=empirical_risk.device)
-            return empirical_risk + torch.sqrt(kl_ratio_tensor)
+                combinations = torch.tensor(float(self.n_bound ** tuple_size if tuple_size else 1), 
+                                          dtype=torch.float32)
+            
+            effective_size = max(1, train_size // (tuple_size if tuple_size else 1))
+            log_delta_term = torch.log(combinations / delta)
+            kl_ratio = (kl + log_delta_term) / effective_size
+            
+            return empirical_risk + torch.sqrt(kl_ratio)
         
         elif self.objective == 'nested_ntuple':
-            # Advanced nested N-tuple bound with Monte Carlo concentration
             if tuple_size is None:
-                tuple_size = 3  # Default tuple size
+                tuple_size = 3
                 
-            # Parameters for nested bound
-            tuple_count = max(1, int(np.floor(train_size / tuple_size)))  # ⌊n/m⌋
+            # Use torch operations
+            tuple_count = max(1, int(train_size // tuple_size))
             
-            # Combinatorial term ln(C(n,m) + 1) for numerical stability
             if tuple_size <= self.n_bound:
-                log_combinations = math.lgamma(self.n_bound + 1) - math.lgamma(tuple_size + 1) - math.lgamma(self.n_bound - tuple_size + 1)
-                log_combinations_plus_one = np.log(np.exp(log_combinations) + 1)
+                log_combinations = (torch.lgamma(torch.tensor(self.n_bound + 1, dtype=torch.float32)) - 
+                                  torch.lgamma(torch.tensor(tuple_size + 1, dtype=torch.float32)) - 
+                                  torch.lgamma(torch.tensor(self.n_bound - tuple_size + 1, dtype=torch.float32)))
+                log_combinations_plus_one = torch.log(torch.exp(log_combinations) + 1)
             else:
-                # Fallback for large tuple_size
-                log_combinations_plus_one = tuple_size * np.log(self.n_bound) + np.log(2)
+                log_combinations_plus_one = (tuple_size * torch.log(torch.tensor(self.n_bound, dtype=torch.float32)) + 
+                                           torch.log(torch.tensor(2.0)))
             
-            # Split confidence between inner and outer bounds
-            delta_prime = delta / 2  # δ' for inner MC bound
-            delta_outer = delta / 2  # δ for outer PAC-Bayes bound
+            delta_prime = delta / 2
+            delta_outer = delta / 2
             
-            # Inner bound: f_kl(R_S(Q^k), log(2/δ')/k)
-            # This bounds the empirical risk using Monte Carlo concentration
-            inner_confidence_term = np.log(2 / delta_prime) / tuple_size
+            # Create a differentiable approximation of inv_kl or use a simpler bound
+            # Since inv_kl is complex, let's use a simpler nested bound:
+            inner_confidence_term = torch.log(torch.tensor(2 / delta_prime)) / tuple_size
+            inner_bound = empirical_risk + torch.sqrt(inner_confidence_term)
+            outer_confidence_term = (kl + log_combinations_plus_one / delta_outer) / (2 * tuple_count)
+            final_bound = inner_bound + torch.sqrt(outer_confidence_term)
             
-            # Convert to tensor for numerical inversion
-            empirical_risk_val = empirical_risk.item() if torch.is_tensor(empirical_risk) else empirical_risk
-            
-            # Apply inverse KL for inner bound: f_kl(empirical_risk, inner_confidence_term)
-            inner_bound = inv_kl(empirical_risk_val, inner_confidence_term)
-            
-            # Outer bound parameters
-            outer_kl_term = kl.item() if torch.is_tensor(kl) else kl
-            outer_confidence_term = (outer_kl_term + log_combinations_plus_one / delta_outer) / (2 * tuple_count)
-            
-            # Apply inverse KL for outer bound: f_kl(inner_bound, outer_confidence_term)
-            final_bound = inv_kl(inner_bound, outer_confidence_term)
-            
-            return torch.tensor(final_bound, dtype=empirical_risk.dtype, device=empirical_risk.device)
-    
+            return final_bound
+        
         else:
             raise ValueError(f"Unknown objective: {self.objective}")
+
 
     def mcsampling_ntuple(self, net, data_loader):
         net.eval()
@@ -247,4 +243,3 @@ class PBBobj_NTuple():
     
         return train_obj.item(), risk_nt, empirical_risk_nt, pseudo_accuracy, kl.item() / train_size
     
-
