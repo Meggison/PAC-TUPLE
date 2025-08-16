@@ -253,6 +253,9 @@ class ProbConv2d(nn.Module):
         self.kl_div = self.weight.compute_kl(self.weight_prior) + \
                     self.bias.compute_kl(self.bias_prior)
 
+        # ✅ Clamp KL to reasonable bounds
+        self.kl_div = torch.clamp(self.kl_div, min=1e-8, max=1e6)
+
         return F.conv2d(input, weight, bias, self.stride, self.padding, self.dilation, self.groups)
     
 
