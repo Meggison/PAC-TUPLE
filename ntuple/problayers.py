@@ -55,6 +55,9 @@ class ProbLinear(nn.Module):
         self.out_features = out_features
         self.device = device if torch.cuda.is_available() else 'cpu'
 
+        # ✅ Add bounds checking for rho_prior
+        rho_prior = max(-10, min(rho_prior, 10))  # Prevent extreme values
+
         # compute and set sigma for the truncated gaussian of weights
         sigma_weights = 1/np.sqrt(in_features)
 
@@ -139,6 +142,9 @@ class ProbConv2d(nn.Module):
         self.dilation = dilation
         self.groups = 1
         self.device = device if torch.cuda.is_available() else 'cpu'
+
+        # ✅ Add bounds checking for rho_prior
+        rho_prior = max(-10, min(rho_prior, 10))  # Prevent extreme values
 
         # compute and set sigma for the truncated gaussian of weights
         in_features = self.in_channels
