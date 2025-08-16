@@ -186,17 +186,25 @@ class ProbConv2d(nn.Module):
         
         elif init_prior == 'weights':
             if init_layer_prior:
-                weights_mu_prior = init_layer_prior.weight
-                bias_mu_prior = init_layer_prior.bias
-        
+                # weights_mu_prior = init_layer_prior.weight
+                # bias_mu_prior = init_layer_prior.bias
+                weights_mu_prior = weights_mu_init + torch.randn_like(weights_mu_init) * 0.05
+                bias_mu_prior = bias_mu_init + torch.randn_like(bias_mu_init) * 0.05
             else:
-                # initialise to posterior weights
-                weights_mu_prior = weights_mu_init
-                bias_mu_prior = bias_mu_init
+                # ✅ FIX: Always add noise to avoid identical prior/posterior
+                weights_mu_prior = weights_mu_init + torch.randn_like(weights_mu_init) * 0.05
+                bias_mu_prior = bias_mu_init + torch.randn_like(bias_mu_init) * 0.05
         
         else:
             raise RuntimeError(f'Wrong init_prior {init_prior}')
 
+        # ✅ Ensure device consistency
+        weights_mu_init = weights_mu_init.to(self.device)
+        bias_mu_init = bias_mu_init.to(self.device)
+        weight_rho_init = weight_rho_init.to(self.device)
+        bias_rho_init = bias_rho_init.to(self.device)
+        weights_mu_prior = weights_mu_prior.to(self.device)
+        bias_mu_prior = bias_mu_prior.to(self.device)
         
         if prior_dist == "gaussian":
             dist = Gaussian
@@ -221,6 +229,12 @@ class ProbConv2d(nn.Module):
         
 
     def forward(self, input, sample=False):
+        # ✅ Validate input
+        if not torch.is_tensor(input):
+            raise ValueError("Input must be a tensor")
+        
+        input = input.to(self.device)  # Ensure input is on correct device
+        
         if self.training or sample:
             # during training we sample from the model distribution
             # sample = True can also be set during testing if we
