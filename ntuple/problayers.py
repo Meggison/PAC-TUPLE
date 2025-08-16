@@ -79,8 +79,16 @@ class ProbLinear(nn.Module):
             bias_mu_prior = torch.zeros(out_features)
         else:  # 'weights' case
             # ✅ Use slightly different initialization to avoid zero KL
-            weights_mu_prior = weights_mu_init + torch.randn_like(weights_mu_init) * 0.01
-            bias_mu_prior = bias_mu_init + torch.randn_like(bias_mu_init) * 0.01
+            weights_mu_prior = weights_mu_init + torch.randn_like(weights_mu_init) * 0.05
+            bias_mu_prior = bias_mu_init + torch.randn_like(bias_mu_init) * 0.05
+
+        # ✅ Ensure device consistency
+        weights_mu_init = weights_mu_init.to(self.device)
+        bias_mu_init = bias_mu_init.to(self.device)
+        weights_rho_init = weights_rho_init.to(self.device)
+        bias_rho_init = bias_rho_init.to(self.device)
+        weights_mu_prior = weights_mu_prior.to(self.device)
+        bias_mu_prior = bias_mu_prior.to(self.device)
 
         if prior_dist == 'gaussian':
             dist = Gaussian
