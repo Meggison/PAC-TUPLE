@@ -226,7 +226,6 @@ class ProbConv2d(nn.Module):
             bias_mu_prior.clone(), bias_rho_init.clone(), device=self.device, fixed=True)
         
         self.kl_div = 0
-        
 
     def forward(self, input, sample=False):
         # ✅ Validate input
