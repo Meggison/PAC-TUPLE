@@ -112,6 +112,12 @@ class ProbLinear(nn.Module):
         self.kl_div = 0
 
     def forward(self, input, sample=False):
+        # ✅ Validate input
+        if not torch.is_tensor(input):
+            raise ValueError("Input must be a tensor")
+        
+        input = input.to(self.device)  # Ensure input is on correct device
+        
         if self.training or sample:
             weight = self.weight.sample()
             bias = self.bias.sample()
@@ -123,8 +129,10 @@ class ProbLinear(nn.Module):
         self.kl_div = self.weight.compute_kl(self.weight_prior) + \
                     self.bias.compute_kl(self.bias_prior)
         
-        return F.linear(input, weight, bias)  # or F.conv2d for conv layers
-
+        # ✅ Clamp KL to reasonable bounds
+        self.kl_div = torch.clamp(self.kl_div, min=1e-8, max=1e6)
+        
+        return F.linear(input, weight, bias)
 
 class ProbConv2d(nn.Module):
     """Implementation of a Probabilistic Convolutional layer."""
