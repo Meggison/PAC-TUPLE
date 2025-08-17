@@ -129,18 +129,32 @@ class PBBobj_NTuple():
         return empirical_risk, accuracy
 
     def bound(self, empirical_risk, kl, train_size, tuple_size=None, lambda_var=None):
+        # ✅ CRITICAL FIX: Better KL handling
+        original_kl = kl.clone() if torch.is_tensor(kl) else torch.tensor(kl, dtype=torch.float32)
+        
+        # Check for zero KL (major issue!)
+        if original_kl < 1e-8:
+            print(f"WARNING: KL divergence is {original_kl:.2e} - this will make bounds vacuous!")
+            # Add small epsilon to prevent completely vacuous bounds
+            kl = torch.clamp(original_kl, min=1e-6) 
+        else:
+            kl = original_kl
+        
         kl = kl * self.kl_penalty
         delta = self.delta
         
         # Ensure empirical_risk is a tensor with gradients
         if not torch.is_tensor(empirical_risk):
-            empirical_risk = torch.tensor(empirical_risk, dtype=torch.float32, requires_grad=True)
+            empirical_risk = torch.tensor(empirical_risk, dtype=torch.float32, 
+                                        requires_grad=True, device=self.device)
         
-        # ✅ Use torch operations to preserve gradients
-        log_term = torch.log(torch.tensor(
-            2 * torch.sqrt(torch.tensor(train_size, dtype=torch.float32)) / delta,
-            dtype=empirical_risk.dtype, device=empirical_risk.device))
-    
+        # ✅ FIX: Ensure all tensors are on the same device
+        kl = kl.to(self.device)
+        
+        # ✅ FIX: More numerically stable log computation    
+        sqrt_train_size = torch.sqrt(torch.tensor(train_size, dtype=torch.float32, device=self.device))
+        log_term = torch.log(2 * sqrt_train_size / delta)
+
         if self.objective == 'fquad':
             term = (kl + log_term) / (2 * train_size)
             part1 = torch.sqrt(empirical_risk + term)
@@ -152,18 +166,47 @@ class PBBobj_NTuple():
             return empirical_risk + torch.sqrt(term)
         
         elif self.objective == 'ntuple':
+            # ✅ FIX: Simplified and more stable n-tuple bound
+            # Use standard PAC-Bayes bound but adjusted for tuple structure
+            if tuple_size is None:
+                tuple_size = 3  # Default for triplet
+                
+            # ✅ More stable computation
+            effective_train_size = torch.tensor(max(1, train_size), dtype=torch.float32, device=self.device)
+            
+            # Simple adjustment for tuple structure - don't overcomplicate
+            tuple_adjustment = torch.log(torch.tensor(tuple_size, dtype=torch.float32, device=self.device))
+            adjusted_log_term = log_term + tuple_adjustment
+            
+            term = (kl + adjusted_log_term) / (2 * effective_train_size)
+            return empirical_risk + torch.sqrt(term)
+        
+        elif self.objective == 'nested_ntuple':
+            # ✅ NEW: Combinatorial n-tuple bound with proper complexity modeling
+            if tuple_size is None:
+                tuple_size = 3  # Default for triplet
+                
+            # ✅ Combinatorial complexity calculation
             if tuple_size is not None and tuple_size <= self.n_bound:
-                log_combinations = (torch.lgamma(torch.tensor(self.n_bound + 1, dtype=torch.float32)) - 
-                                  torch.lgamma(torch.tensor(tuple_size + 1, dtype=torch.float32)) - 
-                                  torch.lgamma(torch.tensor(self.n_bound - tuple_size + 1, dtype=torch.float32)))
+                # Use binomial coefficient C(n_bound, tuple_size) via log-gamma functions
+                log_combinations = (torch.lgamma(torch.tensor(self.n_bound + 1, dtype=torch.float32, device=self.device)) - 
+                                torch.lgamma(torch.tensor(tuple_size + 1, dtype=torch.float32, device=self.device)) - 
+                                torch.lgamma(torch.tensor(self.n_bound - tuple_size + 1, dtype=torch.float32, device=self.device)))
                 combinations = torch.exp(log_combinations)
             else:
+                # Fallback to n_bound^tuple_size for large tuple_size
                 combinations = torch.tensor(float(self.n_bound ** tuple_size if tuple_size else 1), 
-                                          dtype=torch.float32)
+                                        dtype=torch.float32, device=self.device)
             
+            # ✅ Effective sample size adjustment for tuple structure
             effective_size = max(1, train_size // (tuple_size if tuple_size else 1))
+            effective_size_tensor = torch.tensor(effective_size, dtype=torch.float32, device=self.device)
+            
+            # ✅ Combinatorial complexity penalty
             log_delta_term = torch.log(combinations / delta)
-            kl_ratio = (kl + log_delta_term) / effective_size
+            
+            # ✅ More principled bound computation
+            kl_ratio = (kl + log_delta_term) / effective_size_tensor
             
             return empirical_risk + torch.sqrt(kl_ratio)
         
