@@ -249,29 +249,104 @@ class PBBobj_NTuple():
         total_risk = 0.0
         total_accuracy = 0.0
         num_batches = len(data_loader)
+        
+        if num_batches == 0:
+            return 1.0, 0.0
+
+        # **KEY OPTIMIZATION**: Batch MC samples instead of sequential processing
+        mc_batch_size = min(32, self.mc_samples)  # Adjust based on your memory
+        
         with torch.no_grad():
             for batch in tqdm(data_loader, desc="MC Sampling", leave=False):
                 anchor_imgs, positive_imgs, negative_imgs = batch
                 anchor_imgs = anchor_imgs.to(self.device)
                 positive_imgs = positive_imgs.to(self.device)
                 negative_imgs = negative_imgs.to(self.device)
-                risk_mc_batch = 0.0
-                accuracy_mc_batch = 0.0
-                for _ in range(self.mc_samples):
-                    loss, accuracy = self.compute_losses(net, anchor_imgs, positive_imgs, negative_imgs)
-                    risk_mc_batch += loss.item()
-                    accuracy_mc_batch += accuracy
 
-                # Average the risk and accuracy over the MC samples
-                risk_mc_batch /= self.mc_samples
-                accuracy_mc_batch /= self.mc_samples
-                total_risk += risk_mc_batch
-                total_accuracy += accuracy_mc_batch
+                risk_accumulator = []
+                accuracy_accumulator = []
+                
+                # Process MC samples in batches
+                for start_idx in range(0, self.mc_samples, mc_batch_size):
+                    end_idx = min(start_idx + mc_batch_size, self.mc_samples)
+                    current_batch_size = end_idx - start_idx
+                    
+                    try:
+                        # **VECTORIZED MC SAMPLING**
+                        batch_risks, batch_accuracies = self._vectorized_mc_batch(
+                            net, anchor_imgs, positive_imgs, negative_imgs, current_batch_size
+                        )
+                        
+                        risk_accumulator.extend(batch_risks)
+                        accuracy_accumulator.extend(batch_accuracies)
+                        
+                        # Clear cache periodically to prevent memory buildup
+                        if (start_idx + mc_batch_size) % (mc_batch_size * 4) == 0:
+                            torch.cuda.empty_cache()
+                            
+                    except RuntimeError as e:
+                        if 'out of memory' in str(e):
+                            print(f"OOM at batch {start_idx}, reducing mc_batch_size")
+                            torch.cuda.empty_cache()
+                            mc_batch_size = max(1, mc_batch_size // 2)
+                            continue
+                        else:
+                            raise e
 
-        # Average over all batches
-        avg_risk = total_risk / num_batches
-        avg_pseudo_accuracy = total_accuracy / num_batches
-        return avg_risk, avg_pseudo_accuracy
+                # Aggregate results
+                if risk_accumulator:
+                    total_risk += sum(risk_accumulator) / len(risk_accumulator)
+                    total_accuracy += sum(accuracy_accumulator) / len(accuracy_accumulator)
+                else:
+                    total_risk += 1.0
+                    total_accuracy += 0.0
+
+        return total_risk / num_batches, total_accuracy / num_batches
+    
+    def _vectorized_mc_batch(self, net, anchor_imgs, positive_imgs, negative_imgs, batch_size):
+        """Vectorized MC sampling for a batch of samples."""
+        risks = []
+        accuracies = []
+        
+        # **MEMORY OPTIMIZATION**: Process in sub-batches if needed
+        sub_batch_size = min(8, batch_size)  # Adjust based on your model size
+        
+        for i in range(0, batch_size, sub_batch_size):
+            current_size = min(sub_batch_size, batch_size - i)
+            
+            # **EFFICIENT SAMPLING**: Replicate inputs for vectorized processing
+            anchor_batch = anchor_imgs.repeat(current_size, 1, 1, 1)
+            positive_batch = positive_imgs.repeat(current_size, 1, 1, 1)
+            negative_batch = negative_imgs.repeat(current_size, 1, 1, 1, 1).view(-1, *negative_imgs.shape[2:])
+            
+            # Forward pass with sampling enabled
+            anchor_embeds = net(anchor_batch, sample=True)
+            positive_embeds = net(positive_batch, sample=True)
+            
+            # Process negatives efficiently
+            B, N_neg = negative_imgs.shape[:2]
+            neg_flat = negative_batch.view(current_size * B * N_neg, *negative_imgs.shape[2:])
+            neg_embeds_flat = net(neg_flat, sample=True)
+            neg_embeds = neg_embeds_flat.view(current_size, B, N_neg, -1)
+            
+            # Compute losses and accuracies for the batch
+            for j in range(current_size):
+                risk = self.compute_empirical_risk(
+                    anchor_embeds[j*B:(j+1)*B], 
+                    positive_embeds[j*B:(j+1)*B], 
+                    neg_embeds[j]
+                )
+                accuracy = self.compute_accuracy(
+                    anchor_embeds[j*B:(j+1)*B], 
+                    positive_embeds[j*B:(j+1)*B], 
+                    neg_embeds[j]
+                )
+                
+                risks.append(risk.item() if torch.is_tensor(risk) else risk)
+                accuracies.append(accuracy)
+        
+        return risks, accuracies
+
 
     def train_obj(self, net, batch, train_size):
         tuple_size = self.get_tuple_size(batch)
