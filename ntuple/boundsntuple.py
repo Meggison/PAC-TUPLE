@@ -6,6 +6,7 @@ from losses import NTupleLoss, GeneralizedTripletLoss, TripletLoss
 from torch.nn.functional import cosine_similarity
 import torch.nn.functional as F
 
+
 def inv_kl(qs, ks):
     """Numerically invert the binary KL for PAC-Bayes-kl bound."""
     izq = qs
@@ -26,6 +27,7 @@ def inv_kl(qs, ks):
         qd = p
     return qd
 
+
 class PBBobj_NTuple():
     """PAC-Bayes bound class for probabilistic networks with N-tuple/metric losses."""
     def __init__(self, objective='fquad', pmin=1e-4, delta=0.025,
@@ -42,10 +44,12 @@ class PBBobj_NTuple():
         self.n_bound = n_bound
         self.loss_fn = GeneralizedTripletLoss()  # Default loss function, can be changed later
 
+
     def get_tuple_size(self, batch):
         _, _, negatives = batch
         num_negatives = negatives.shape[1]
         return 2 + num_negatives
+
 
     def compute_empirical_risk(self, anchor_embed, positive_embed, negative_embeds):
         empirical_risk = self.loss_fn(anchor_embed, positive_embed, negative_embeds)
@@ -80,6 +84,7 @@ class PBBobj_NTuple():
         accuracy = correct_predictions.mean().item()
 
         return accuracy
+
 
     def compute_losses(self, net, anchor_data, positive_data, negative_data, clamping=True):
         """
@@ -127,6 +132,7 @@ class PBBobj_NTuple():
         accuracy = self.compute_accuracy(anchor_embed, positive_embed, negative_embed)
 
         return empirical_risk, accuracy
+
 
     def bound(self, empirical_risk, kl, train_size, tuple_size=None, lambda_var=None):
         # ✅ CRITICAL FIX: Better KL handling
@@ -209,38 +215,13 @@ class PBBobj_NTuple():
             kl_ratio = (kl + log_delta_term) / effective_size_tensor
             
             return empirical_risk + torch.sqrt(kl_ratio)
-        
-        elif self.objective == 'nested_ntuple':
-            if tuple_size is None:
-                tuple_size = 3
-                
-            # Use torch operations
-            tuple_count = max(1, int(train_size // tuple_size))
+
             
-            if tuple_size <= self.n_bound:
-                log_combinations = (torch.lgamma(torch.tensor(self.n_bound + 1, dtype=torch.float32)) - 
-                                  torch.lgamma(torch.tensor(tuple_size + 1, dtype=torch.float32)) - 
-                                  torch.lgamma(torch.tensor(self.n_bound - tuple_size + 1, dtype=torch.float32)))
-                log_combinations_plus_one = torch.log(torch.exp(log_combinations) + 1)
-            else:
-                log_combinations_plus_one = (tuple_size * torch.log(torch.tensor(self.n_bound, dtype=torch.float32)) + 
-                                           torch.log(torch.tensor(2.0)))
-            
-            delta_prime = delta / 2
-            delta_outer = delta / 2
-            
-            # Create a differentiable approximation of inv_kl or use a simpler bound
-            # Since inv_kl is complex, let's use a simpler nested bound:
-            inner_confidence_term = torch.log(torch.tensor(2 / delta_prime)) / tuple_size
-            inner_bound = empirical_risk + torch.sqrt(inner_confidence_term)
-            outer_confidence_term = (kl + log_combinations_plus_one / delta_outer) / (2 * tuple_count)
-            final_bound = inner_bound + torch.sqrt(outer_confidence_term)
-            
-            return final_bound
         
         else:
             # ✅ Remove overly complex objectives for now
             raise ValueError(f"Objective {self.objective} not supported. Use 'fquad', 'fclassic', 'ntuple', or 'nested_ntuple'")
+        
 
 
 
