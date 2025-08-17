@@ -239,7 +239,9 @@ class PBBobj_NTuple():
             return final_bound
         
         else:
-            raise ValueError(f"Unknown objective: {self.objective}")
+            # ✅ Remove overly complex objectives for now
+            raise ValueError(f"Objective {self.objective} not supported. Use 'fquad', 'fclassic', 'ntuple', or 'nested_ntuple'")
+
 
 
     def mcsampling_ntuple(self, net, data_loader):
