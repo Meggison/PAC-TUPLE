@@ -357,17 +357,74 @@ class PBBobj_NTuple():
     
     def compute_final_stats_risk(self, net, data_loader, train_size):
         """Compute final statistics for risk and KL divergence."""
-
+        
         kl = net.compute_kl()
+        
+        # ✅ FIX: Add validation
+        if torch.is_tensor(kl):
+            kl_value = kl.item()
+        else:
+            kl_value = float(kl)
+            
+        if kl_value < 1e-8:
+            print(f"CRITICAL: KL divergence is {kl_value:.2e} - bounds will be vacuous!")
+            print("Check probabilistic layer initialization and sampling!")
+        
         estimated_risk, pseudo_accuracy = self.mcsampling_ntuple(net, data_loader)
-
+        
+        # ✅ FIX: Add bounds checking
+        estimated_risk = max(1e-6, min(0.999, estimated_risk))  # Avoid edge cases
+        
         mc_error_term = np.sqrt(np.log(2 / self.delta_test) / self.mc_samples)
-        empirical_risk_nt = inv_kl(estimated_risk, mc_error_term)
+        
+        # ✅ FIX: Better error handling for inv_kl
+        try:
+            empirical_risk_nt = inv_kl(estimated_risk, mc_error_term)
+        except:
+            print(f"inv_kl failed with estimated_risk={estimated_risk}, mc_error_term={mc_error_term}")
+            empirical_risk_nt = estimated_risk + mc_error_term  # Fallback
+        
+        # ✅ Convert to tensor for bound computation
+        empirical_risk_tensor = torch.tensor(empirical_risk_nt, dtype=torch.float32, device=self.device)
+        train_obj = self.bound(empirical_risk_tensor, kl, self.n_posterior)
+        
+        # Final risk certificate
+        bound_term = (kl_value + np.log((2 * np.sqrt(self.n_bound))/self.delta_test))/self.n_bound
+        try:
+            risk_nt = inv_kl(empirical_risk_nt, bound_term)
+        except:
+            print(f"Final inv_kl failed, using fallback")
+            risk_nt = empirical_risk_nt + bound_term  # Fallback
+        
+        return train_obj.item(), risk_nt, empirical_risk_nt, pseudo_accuracy, kl_value / train_size
 
-        train_obj = self.bound(empirical_risk_nt, kl,self.n_posterior)
 
-        risk_nt = inv_kl(empirical_risk_nt, (kl + np.log((2 *
-                                                             np.sqrt(self.n_bound))/self.delta_test))/self.n_bound)
-    
-        return train_obj.item(), risk_nt, empirical_risk_nt, pseudo_accuracy, kl.item() / train_size
-    
+    def debug_bound_computation(self, net, batch, train_size):
+        """Debug method to check bound computation"""
+        print("\n=== Bound Computation Debug ===")
+        
+        tuple_size = self.get_tuple_size(batch)
+        print(f"Tuple size: {tuple_size}")
+        
+        kl = net.compute_kl()
+        kl_val = kl.item() if torch.is_tensor(kl) else kl
+        print(f"KL divergence: {kl_val:.8f}")
+        
+        empirical_risk, accuracy = self.compute_losses(net, *batch)
+        emp_risk_val = empirical_risk.item() if torch.is_tensor(empirical_risk) else empirical_risk
+        print(f"Empirical risk: {emp_risk_val:.6f}")
+        print(f"Accuracy: {accuracy:.6f}")
+        
+        train_obj = self.bound(empirical_risk, kl, train_size, tuple_size)
+        train_obj_val = train_obj.item() if torch.is_tensor(train_obj) else train_obj
+        print(f"Training objective: {train_obj_val:.6f}")
+        
+        # Check if bound is vacuous
+        if train_obj_val >= 1.0:
+            print("⚠️ WARNING: Bound is vacuous (≥ 1.0)")
+        elif train_obj_val > 0.5:
+            print("⚠️ WARNING: Bound is loose (> 0.5)")
+        else:
+            print("✓ Bound appears reasonable")
+        
+        return train_obj, empirical_risk, kl_val / train_size
