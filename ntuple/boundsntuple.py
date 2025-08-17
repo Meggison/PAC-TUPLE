@@ -49,8 +49,16 @@ class PBBobj_NTuple():
 
     def compute_empirical_risk(self, anchor_embed, positive_embed, negative_embeds):
         empirical_risk = self.loss_fn(anchor_embed, positive_embed, negative_embeds)
-        if self.pmin is not None:
-            empirical_risk = empirical_risk / np.log(1. / self.pmin)
+        
+        # ✅ FIX: Remove pmin scaling for metric learning losses
+        # Metric learning losses are already in [0,1] range typically
+        # Only apply pmin scaling if using cross-entropy surrogate loss
+        if hasattr(self.loss_fn, 'use_pmin_scaling') and self.loss_fn.use_pmin_scaling:
+            if self.pmin is not None:
+                empirical_risk = empirical_risk / np.log(1. / self.pmin)
+        
+        # ✅ Ensure empirical risk is properly bounded
+        empirical_risk = torch.clamp(empirical_risk, 0.0, 1.0)
         return empirical_risk
     
     def compute_accuracy(self, anchor_embed, positive_embed, negative_embeds):
