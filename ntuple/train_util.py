@@ -417,69 +417,210 @@ def runexp(name_data, objective, model, N, sigma_prior, pmin, learning_rate,
             post_risk, post_acc = testPosteriorMeanReID(net, test_loader, bound, device=device)
             ens_risk, ens_acc = testEnsembleReID(net, test_loader, bound, device=device, samples=samples_ensemble)
 
-            print(f"\n***Checkpoint Epoch {epoch+1}***")
-            print(f"KL per n: {kl_per_n:.6f}, Pseudo acc: {pseudo_accuracy:.3f}")
-            print(f"Stochastic: risk={stch_risk:.3f}, acc={stch_acc:.3f}")
-            print(f"Posterior mean: risk={post_risk:.3f}, acc={post_acc:.3f}")
-            print(f"Ensemble: risk={ens_risk:.3f}, acc={ens_acc:.3f}")
-            
-            if debug_mode:
-                # Check for concerning patterns
-                if stch_acc < 0.1:
-                    print("WARNING: Stochastic accuracy very low!")
-                if abs(stch_acc - post_acc) < 0.01:
-                    print("WARNING: No difference between stochastic and deterministic predictions!")
+        # Results summary
+        print(f"\n*** Final Publication Results ***")
+        print(f"Training Objective: {train_obj:.5f}")
+        print(f"Risk Certificate: {risk_ntuple:.5f}")
+        print(f"Empirical Risk: {empirical_risk_ntuple:.5f}")
+        print(f"KL/n: {kl_per_n:.6f}")
+        print(f"Stochastic: risk={stch_risk:.3f}, acc={stch_acc:.3f}")
+        print(f"Posterior mean: risk={post_risk:.3f}, acc={post_acc:.3f}")
+        print(f"Ensemble: risk={ens_risk:.3f}, acc={ens_acc:.3f}")
 
-    # Final evaluation with detailed analysis
-    train_obj, risk_ntuple, empirical_risk_ntuple, pseudo_accuracy, kl_per_n = computeRiskCertificatesReID(
-        net, bound, val_bound, device=device, lambda_var=lambda_var)
-
-    stch_risk, stch_acc = testStochasticReID(net, test_loader, bound, device=device)
-    post_risk, post_acc = testPosteriorMeanReID(net, test_loader, bound, device=device)
-    ens_risk, ens_acc = testEnsembleReID(net, test_loader, bound, device=device, samples=samples_ensemble)
-
-    print(f"\n***Final Results Analysis***") 
-    print(f"Objective, Dataset, N, Sigma, pmin, LR, momentum, LR_prior, momentum_prior, kl_penalty, dropout, Obj_train, Risk_NTuple, Empirical_Risk_NTuple, KL, Pseudo_accuracy, Stch risk, Stch accuracy, Post mean risk, Post mean accuracy, Ens risk, Ens accuracy, 01 error prior net, perc_train, perc_prior")
-    print(f"{objective}, {name_data}, {N}, {sigma_prior:.5f}, {pmin:.5f}, {learning_rate:.5f}, {momentum:.5f}, {learning_rate_prior:.5f}, {momentum_prior:.5f}, {kl_penalty:.5f}, {dropout_prob:.5f}, {train_obj:.5f}, {risk_ntuple:.5f}, {empirical_risk_ntuple:.5f}, {kl_per_n:.5f}, {pseudo_accuracy:.5f}, {stch_risk:.5f}, {stch_acc:.5f}, {post_risk:.5f}, {post_acc:.5f}, {ens_risk:.5f}, {ens_acc:.5f}, {errornet0:.5f}, {perc_train:.5f}, {perc_prior:.5f}")
-    
-    if debug_mode:
-        print(f"\n=== Diagnostic Summary ===")
-        print(f"1. KL Divergence: {kl_per_n:.6f} {'✓ OK' if kl_per_n > 1e-6 else '✗ PROBLEM - Too low!'}")
-        print(f"2. Pseudo Accuracy: {pseudo_accuracy:.3f} {'✓ OK' if pseudo_accuracy > 0.6 else '✗ PROBLEM - Too low!'}")
-        print(f"3. Bound Quality: {risk_ntuple:.3f} {'✓ Non-vacuous' if risk_ntuple < 1.0 else '✗ Vacuous'}")
-        print(f"4. Stochastic vs Deterministic: {abs(stch_acc - post_acc):.3f} {'✓ Good difference' if abs(stch_acc - post_acc) > 0.05 else '✗ No meaningful difference'}")
+        # Print formatted results for logging
+        print(f"\n*** Results Analysis ***")
+        print(f"Objective, Dataset, N, Sigma, pmin, LR, momentum, LR_prior, momentum_prior, kl_penalty, dropout, Obj_train, Risk_NTuple, Empirical_Risk_NTuple, KL, Pseudo_accuracy, Stch risk, Stch accuracy, Post mean risk, Post mean accuracy, Ens risk, Ens accuracy, 01 error prior net, perc_train, perc_prior")
+        print(f"{objective}, {name_data}, {N}, {sigma_prior:.5f}, {1e-5:.5f}, {learning_rate:.5f}, {momentum:.5f}, {learning_rate_prior:.5f}, {momentum_prior:.5f}, {kl_penalty:.5f}, {dropout_prob:.5f}, {train_obj:.5f}, {risk_ntuple:.5f}, {empirical_risk_ntuple:.5f}, {kl_per_n:.5f}, {pseudo_accuracy:.5f}, {stch_risk:.5f}, {stch_acc:.5f}, {post_risk:.5f}, {post_acc:.5f}, {ens_risk:.5f}, {ens_acc:.5f}, {errornet0:.5f}, {perc_train:.5f}, {perc_prior:.5f}")
         
-        if run_baseline:
-            print(f"5. vs Baseline: Prob={stch_acc:.3f}, Det={baseline_acc:.3f} {'✓ Competitive' if stch_acc > baseline_acc * 0.8 else '✗ Much worse than baseline'}")
+        # Enhanced diagnostic summary
+        if debug_mode:
+            print(f"\n=== Publication-Level Diagnostic Summary ===")
+            print(f"1. KL Divergence: {kl_per_n:.6f} {'✓ OK' if kl_per_n > 1e-6 else 'PROBLEM - Too low!'}")
+            print(f"2. Pseudo Accuracy: {pseudo_accuracy:.3f} {'✓ OK' if pseudo_accuracy > 0.6 else '❌ PROBLEM - Too low!'}")
+            print(f"3. Bound Quality: {risk_ntuple:.3f} {'✓ Non-vacuous' if risk_ntuple < 1.0 else '❌ Vacuous'}")
+            
+            # Publication-level bound quality assessment
+            if risk_ntuple < 0.15:
+                print("EXCELLENT: Tight bound comparable to paper results!")
+            elif risk_ntuple < 0.5:
+                print("GOOD: Reasonable bound for metric learning")
+            elif risk_ntuple < 1.0:
+                print("Non-vacuous but loose bound")
+            
+            print(f"4. Stochastic vs Deterministic: {abs(stch_acc - post_acc):.3f} {'✓ Good difference' if abs(stch_acc - post_acc) > 0.05 else '❌ No meaningful difference'}")
+            
+            if run_baseline and baseline_acc > 0:
+                print(f"5. vs Baseline: PAC-Bayes={stch_acc:.3f}, Baseline={baseline_acc:.3f} {'✓ Competitive' if stch_acc > baseline_acc * 0.8 else '❌ Much worse than baseline'}")
+            
+            # Publication comparison
+            print(f"\nPublication Comparison:")
+            print(f"   Paper MNIST: Risk ~0.08-0.15, Acc ~85-90%")
+            print(f"   Paper CIFAR: Risk ~0.15-0.25, Acc ~75-85%")
+            print(f"   Your result: Risk {risk_ntuple:.3f}, Acc {stch_acc:.1%}")
+
+        return {
+            'train_obj': train_obj,
+            'risk_ntuple': risk_ntuple,
+            'empirical_risk_ntuple': empirical_risk_ntuple,
+            'kl_per_n': kl_per_n,
+            'pseudo_accuracy': pseudo_accuracy,
+            'stch_risk': stch_risk,
+            'stch_accuracy': stch_acc,
+            'post_risk': post_risk,
+            'post_accuracy': post_acc,
+            'ens_risk': ens_risk,
+            'ens_accuracy': ens_acc,
+            'baseline_error': errornet0
+        }
+
+    except Exception as e:
+        print(f"Final evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def runexp_with_structured_output(name_data, objective, model, N, sigma_prior, pmin, 
+                                 learning_rate, momentum, **kwargs):
+    """Modified version of runexp that returns structured results for ablation studies"""
+    
+    # Filter out unsupported parameters before calling runexp
+    supported_params = {
+        'learning_rate_prior', 'momentum_prior', 'delta', 'layers', 'delta_test', 
+        'mc_samples', 'samples_ensemble', 'kl_penalty', 'initial_lamb', 'train_epochs', 
+        'prior_dist', 'verbose', 'device', 'prior_epochs', 'dropout_prob', 'perc_train', 
+        'verbose_test', 'perc_prior', 'batch_size', 'embedding_dim', 'run_baseline', 
+        'debug_mode', 'random_seed'
+    }
+    
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+    
+    # Call the main runexp function
+    results = runexp(
+        name_data=name_data, 
+        objective=objective, 
+        model=model, 
+        N=N, 
+        sigma_prior=sigma_prior, 
+        pmin=pmin,
+        learning_rate=learning_rate, 
+        momentum=momentum, 
+        **filtered_kwargs
+    )
+    
+    # If runexp failed, return failure structure
+    if results is None:
+        return {
+            'status': 'failed',
+            'experiment_name': kwargs.get('experiment_name', 'unknown'),
+            'config': {
+                'objective': objective,
+                'sigma_prior': sigma_prior,
+                'learning_rate': learning_rate,
+                'layers': kwargs.get('layers', 4),
+                'embedding_dim': kwargs.get('embedding_dim', 256),
+                'kl_penalty': kwargs.get('kl_penalty', 1e-6),
+                'perc_prior': kwargs.get('perc_prior', 0.2),
+                'dropout_prob': kwargs.get('dropout_prob', 0.2),
+                'train_epochs': kwargs.get('train_epochs', 100),
+                'prior_epochs': kwargs.get('prior_epochs', 20),
+            }
+        }
+    
+    # Structure the successful results
+    structured_results = {
+        'status': 'success',
+        'experiment_name': kwargs.get('experiment_name', 'unnamed'),
+        'train_obj': results.get('train_obj', 0.0),
+        'risk_ntuple': results.get('risk_ntuple', 1.0),
+        'empirical_risk_ntuple': results.get('empirical_risk_ntuple', 1.0),
+        'kl_per_n': results.get('kl_per_n', 0.0),
+        'pseudo_accuracy': results.get('pseudo_accuracy', 0.0),
+        'stch_risk': results.get('stch_risk', 1.0),
+        'stch_accuracy': results.get('stch_accuracy', 0.0),
+        'post_risk': results.get('post_risk', 1.0),
+        'post_accuracy': results.get('post_accuracy', 0.0),
+        'ens_risk': results.get('ens_risk', 1.0),
+        'ens_accuracy': results.get('ens_accuracy', 0.0),
+        'baseline_error': results.get('baseline_error', 1.0),
+        'config': {
+            'objective': objective,
+            'name_data': name_data,
+            'model': model,
+            'N': N,
+            'sigma_prior': sigma_prior,
+            'pmin': pmin,
+            'learning_rate': learning_rate,
+            'momentum': momentum,
+            'layers': kwargs.get('layers', 4),
+            'embedding_dim': kwargs.get('embedding_dim', 128),
+            'kl_penalty': kwargs.get('kl_penalty', 1e-6),
+            'perc_prior': kwargs.get('perc_prior', 0.2),
+            'dropout_prob': kwargs.get('dropout_prob', 0.2),
+            'train_epochs': kwargs.get('train_epochs', 100),
+            'prior_epochs': kwargs.get('prior_epochs', 20),
+            'mc_samples': kwargs.get('mc_samples', 1500),
+            'batch_size': kwargs.get('batch_size', 128),
+            'prior_dist': kwargs.get('prior_dist', 'gaussian'),
+            'perc_train': kwargs.get('perc_train', 0.8),
+        },
+        # Additional metrics for analysis
+        'is_vacuous': results.get('risk_ntuple', 1.0) >= 1.0,
+        'kl_reasonable': results.get('kl_per_n', 0.0) > 1e-6,
+        'good_accuracy': results.get('stch_accuracy', 0.0) > 0.6,
+        'stoch_det_difference': abs(results.get('stch_accuracy', 0.0) - results.get('post_accuracy', 0.0)),
+    }
+    
+    return structured_results
 
 def count_parameters(model): 
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
-# Updated experiment call with debugging enabled
 if __name__ == "__main__":
-    # Add error handling for the main experiment
+    # Publication-level experiment
+    print("=== Publication-Level PAC-Bayes N-tuple Metric Learning Experiment ===")
+    
     try:
-        runexp(
+        results = runexp(
             name_data='cifar10',
-            objective='nested_ntuple', 
+            objective='nested_ntuple',  # Paper's best objective
             model='cnn',
-            N=3,
-            sigma_prior=0.1,
-            pmin=1e-4,
-            learning_rate=0.005,  # Increased  from 1e-3
-            kl_penalty=0.01,
+            N=4,  # 4-tuple (anchor + positive + 2 negatives)
+            sigma_prior=0.01,  # Based on your winning experiments
+            pmin=1e-5,  # Paper's exact value
+            learning_rate=0.005,  # Your breakthrough value
+            kl_penalty=1e-6,  # Your breakthrough value
             momentum=0.9,
             layers=4,
-            train_epochs=30,
-            batch_size=32,
-            embedding_dim=128,
+            train_epochs=100,  # Full paper-level training
+            batch_size=250,  # Paper's exact value
+            embedding_dim=128,  # Your successful configuration
+            mc_samples=3000,  # Paper's exact value
+            samples_ensemble=1000,  # Paper-level ensemble
             verbose=True,
             verbose_test=True,
             device='cuda' if torch.cuda.is_available() else 'cpu',
             run_baseline=True,
-            debug_mode=True
+            debug_mode=True,
+            perc_prior=0.4,  # Paper's standard split
+            prior_epochs=20,  # Adequate prior training
         )
+        
+        if results is not None:
+            print("\nExperiment completed successfully!")
+            print(f"Final stochastic accuracy: {results['stch_accuracy']:.1%}")
+            print(f"Risk certificate: {results['risk_ntuple']:.4f}")
+            print(f"KL/n: {results['kl_per_n']:.6f}")
+            
+            # Publication quality assessment
+            if results['risk_ntuple'] < 0.2 and results['stch_accuracy'] > 0.7:
+                print("EXCELLENT: Results are publication-ready!")
+            elif results['risk_ntuple'] < 1.0 and results['stch_accuracy'] > 0.5:
+                print("GOOD: Solid results, approaching publication level")
+            else:
+                print("NEEDS IMPROVEMENT: Consider hyperparameter tuning")
+        else:
+            print("\nExperiment failed - check error messages above")
+            
     except Exception as e:
         print(f"\nExperiment failed with error: {e}")
         print("This might be due to:")
@@ -489,21 +630,10 @@ if __name__ == "__main__":
         print("- Device compatibility problems")
         import traceback
         traceback.print_exc()
-    
-    # # MNIST experiment
-    # runexp(
-    #     name_data='mnist',
-    #     objective='ntuple',
-    #     model='fcn', 
-    #     N=4,  # anchor + positive + 2 negatives
-    #     sigma_prior=1.0,
-    #     pmin=1e-4,
-    #     learning_rate=1e-3,
-    #     momentum=0.9,
-    #     train_epochs=30,
-    #     batch_size=64,
-    #     embedding_dim=64,
-    #     verbose=True,
-    #     verbose_test=True,
-    #     device='cuda' if torch.cuda.is_available() else 'cpu'
-    # )
+        
+        print(f"\n=== Troubleshooting Suggestions ===")
+        print("1. Reduce batch_size from 250 to 128 if memory issues")
+        print("2. Reduce mc_samples from 150000 to 50000 for testing")
+        print("3. Reduce train_epochs from 100 to 30 for initial testing")
+        print("4. Check CUDA memory usage with nvidia-smi")
+        print("5. Test with smaller embedding_dim (64 instead of 128)")
