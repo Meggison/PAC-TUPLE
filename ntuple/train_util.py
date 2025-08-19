@@ -265,55 +265,50 @@ def runexp(name_data, objective, model, N, sigma_prior, pmin, learning_rate,
         prior_loader = DataLoader(prior_dataset, batch_size=batch_size, shuffle=True)
         train_loader = DataLoader(posterior_dataset, batch_size=batch_size, shuffle=True)
         val_bound = DataLoader(prior_dataset, batch_size=batch_size, shuffle=False)
-        val_bound_one_batch = DataLoader(prior_dataset, batch_size=len(prior_dataset), shuffle=False)
     else:
         prior_loader = None
         train_loader = DataLoader(full_train_dataset, batch_size=batch_size, shuffle=True)
         val_bound = train_loader
-        val_bound_one_batch = DataLoader(full_train_dataset, batch_size=len(full_train_dataset), shuffle=False)
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Compute rho_prior
+    # Compute rho_prior with bounds checking
+    if sigma_prior <= 0:
+        raise ValueError(f"sigma_prior must be positive, got {sigma_prior}")
+    
     rho_prior = math.log(math.exp(sigma_prior) - 1.0)
     
     if debug_mode:
         print(f"Rho prior: {rho_prior:.6f}")
 
-    # Initialize standard model (for prior)
-    if model == 'cnn':
-        if name_data == 'cifar10':
-            if layers == 4:
+    # Initialize networks with error handling
+    try:
+        # Standard model for prior
+        if model == 'cnn':
+            if name_data == 'cifar10':
+                net_class = {4: ReIDCNNet4l, 9: ReIDCNNet9l, 13: ReIDCNNet13l, 15: ReIDCNNet15l}
+                if layers not in net_class:
+                    raise ValueError(f"Unsupported layers: {layers}")
+                net0 = net_class[layers](embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
+            else:  # MNIST
                 net0 = ReIDCNNet4l(embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
-            elif layers == 9:
-                net0 = ReIDCNNet9l(embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
-            elif layers == 13:
-                net0 = ReIDCNNet13l(embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
-            elif layers == 15:
-                net0 = ReIDCNNet15l(embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
-            else: 
-                raise RuntimeError(f'Wrong number of layers {layers}')
-        else:  # MNIST
-            net0 = ReIDCNNet4l(embedding_dim=embedding_dim, dropout_prob=dropout_prob).to(device)
-    elif model == 'fcn':
-        if name_data == 'cifar10':
-            raise RuntimeError(f'CIFAR-10 not supported with FCN architecture')
-        elif name_data == 'mnist':
+        elif model == 'fcn':
+            if name_data == 'cifar10':
+                raise RuntimeError('CIFAR-10 not supported with FCN architecture')
             net0 = ProbReIDNet4l(embedding_dim=embedding_dim, rho_prior=rho_prior,
                                prior_dist=prior_dist, device=device).to(device)
-    else:
-        raise RuntimeError(f'Architecture {model} not supported')
+        else:
+            raise RuntimeError(f'Architecture {model} not supported')
 
-    # Train or evaluate prior
-    if perc_prior > 0 and prior_loader is not None:
-        # Train prior network
-        optimizer_prior = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
-        for epoch in trange(prior_epochs, desc="Prior Training"):
-            trainReIDNet(net0, optimizer_prior, epoch, prior_loader, device=device, verbose=verbose)
-        errornet0, _ = testReIDNet(net0, test_loader, device=device, verbose=False)
-    else:
-        # Random prior
-        errornet0, _ = testReIDNet(net0, test_loader, device=device, verbose=False)
+        # Train or evaluate prior
+        if perc_prior > 0 and prior_loader is not None:
+            optimizer_prior = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
+            print("Training prior network...")
+            for epoch in trange(prior_epochs, desc="Prior Training"):
+                trainReIDNet(net0, optimizer_prior, epoch, prior_loader, device=device, verbose=verbose)
+            errornet0, accnet0 = testReIDNet(net0, test_loader, device=device, verbose=False)
+        else:
+            errornet0, accnet0 = testReIDNet(net0, test_loader, device=device, verbose=False)
 
         print(f"Prior network test error: {errornet0:.4f}")
         print(f"Prior network test accuracy: {accnet0:.4f}")
