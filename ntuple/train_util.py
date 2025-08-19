@@ -315,107 +315,124 @@ def runexp(name_data, objective, model, N, sigma_prior, pmin, learning_rate,
         # Random prior
         errornet0, _ = testReIDNet(net0, test_loader, device=device, verbose=False)
 
-    # Get dataset sizes
-    posterior_n_size = len(train_loader.dataset)
-    bound_n_size = len(val_bound.dataset)
+        print(f"Prior network test error: {errornet0:.4f}")
+        print(f"Prior network test accuracy: {accnet0:.4f}")
 
-
-    # Initialize probabilistic model
-    toolarge = True  # Always use batch processing for N-tuple
-    
-    if model == 'cnn':
-        if name_data == 'cifar10':
-            if layers == 4:
-                net = ProbReIDCNNet4l(embedding_dim=embedding_dim, rho_prior=rho_prior, 
+        # Initialize probabilistic model
+        if model == 'cnn':
+            if name_data == 'cifar10':
+                prob_net_class = {4: ProbReIDCNNet4l, 9: ProbReIDCNNet9l, 13: ProbReIDCNNet13l, 15: ProbReIDCNNet15l}
+                net = prob_net_class[layers](embedding_dim=embedding_dim, rho_prior=rho_prior, 
+                                           prior_dist=prior_dist, device=device, init_net=net0).to(device)
+            else:  # MNIST
+                net = ProbReIDCNNet4l(embedding_dim=embedding_dim, rho_prior=rho_prior,
                                     prior_dist=prior_dist, device=device, init_net=net0).to(device)
-            elif layers == 9:
-                net = ProbReIDCNNet9l(embedding_dim=embedding_dim, rho_prior=rho_prior,
-                                    prior_dist=prior_dist, device=device, init_net=net0).to(device)
-            elif layers == 13:
-                net = ProbReIDCNNet13l(embedding_dim=embedding_dim, rho_prior=rho_prior,
-                                     prior_dist=prior_dist, device=device, init_net=net0).to(device)
-            elif layers == 15: 
-                net = ProbReIDCNNet15l(embedding_dim=embedding_dim, rho_prior=rho_prior,
-                                     prior_dist=prior_dist, device=device, init_net=net0).to(device)
-            else: 
-                raise RuntimeError(f'Wrong number of layers {layers}')
-        else:  # MNIST
-            net = ProbReIDCNNet4l(embedding_dim=embedding_dim, rho_prior=rho_prior,
-                                prior_dist=prior_dist, device=device, init_net=net0).to(device)
-    elif model == 'fcn':
-        if name_data == 'cifar10':
-            raise RuntimeError(f'CIFAR-10 not supported with FCN architecture')
-        elif name_data == 'mnist':
+        elif model == 'fcn':
             net = ProbReIDNet4l(embedding_dim=embedding_dim, rho_prior=rho_prior,
                               prior_dist=prior_dist, device=device, init_net=net0).to(device)
-    else:
-        raise RuntimeError(f'Architecture {model} not supported')
 
+    except Exception as e:
+        print(f"Network initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
-    # Initialize PAC-Bayes objective
-    bound = PBBobj_NTuple(objective=objective, pmin=pmin, delta=delta,
-                         delta_test=delta_test, mc_samples=mc_samples, 
-                         kl_penalty=kl_penalty, device=device, 
-                         n_posterior=posterior_n_size, n_bound=bound_n_size)
+    # Initialize PAC-Bayes objective with publication-level parameters
+    try:
+        bound = PBBobj_NTuple(
+            objective=objective, 
+            pmin=1e-5,  # Paper's value
+            delta=0.025,  # Paper's exact value
+            delta_test=0.01,  # Paper's exact value
+            mc_samples=mc_samples,  # Publication-level 
+            kl_penalty=kl_penalty, 
+            device=device, 
+            n_posterior=len(train_loader.dataset), 
+            n_bound=len(val_bound.dataset)
+        )
+    except Exception as e:
+        print(f"PAC-Bayes objective initialization failed: {e}")
+        return None
 
-    # Initialize optimizer (lambda not implemented yet)
-    optimizer_lambda = None
-    lambda_var = None
+    # Initialize optimizer
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
 
     if debug_mode:
         print(f"Probabilistic model parameters: {count_parameters(net):,}")
-        # Initial KL check
-        # Initial KL check with detailed debugging
-        initial_kl = debug_kl_components(net, 0, verbose=True)
-        manual_kl, computed_kl = debug_kl_computation(net)
-        print(f"Initial KL divergence: {initial_kl:.6f} (manual: {manual_kl:.6f}, computed: {computed_kl:.6f})")
+        
+        # Enhanced initial debugging
         debug_probabilistic_init(net)
-        net.eval()  # ✅ CHANGE: Use eval mode for debugging to avoid BatchNorm issues  
-        dummy_input = torch.randn(2, 3, 32, 32).to(device)  # ✅ CHANGE: Use batch_size=2
-        _ = net(dummy_input, sample=True)
-        test_kl = net.compute_kl()
-        print(f"Test KL after forward pass: {test_kl:.6f}")
-        net.train()  # ✅ CHANGE: Switch back to training mode
+        initial_kl = debug_kl_components(net, 0, verbose=True)
+        
+        # Test forward pass
+        net.eval()
+        try:
+            with torch.no_grad():
+                dummy_input = torch.randn(2, 3, 32, 32).to(device)
+                dummy_output = net(dummy_input, sample=True)
+                test_kl = net.compute_kl()
+                print(f"Test forward pass: output_shape={dummy_output.shape}, KL={test_kl:.8f}")
+        except Exception as e:
+            print(f"⚠️ Test forward pass failed: {e}")
+        finally:
+            net.train()
 
+        if initial_kl < 1e-8:
+            print("\nCRITICAL: Initial KL is essentially zero!")
+            print("This will lead to vacuous bounds. Check:")
+            print("1. Probabilistic layer initialization")
+            print("2. Prior/posterior parameter differences") 
+            print("3. Rho prior value")
+            return None
+
+    # Training loop with enhanced error handling
+    print(f"\nStarting publication-level PAC-Bayes training for {train_epochs} epochs...")
     
-    if initial_kl < 1e-8:
-        print("⚠️  Initial KL is zero - this indicates a fundamental problem!")
-
-    # Training loop with enhanced debugging
     for epoch in trange(train_epochs, desc="PAC-Bayes Training"):
-        trainProbReIDNet(net, optimizer, bound, epoch, train_loader, lambda_var, optimizer_lambda, verbose)
-        
-        # Debug KL every few epochs
-        if debug_mode and ((epoch+1) % 5 == 0):
-            current_kl = debug_kl_components(net, epoch+1, verbose=True)
+        try:
+            trainProbReIDNet(net, optimizer, bound, epoch, train_loader, 
+                           lambda_var=None, optimizer_lambda=None, verbose=verbose)
             
-            # Add detailed KL computation debugging
-            manual_kl, computed_kl = debug_kl_computation(net)
-            print(f"Epoch {epoch+1}: KL divergence = {current_kl:.6f} (manual: {manual_kl:.6f}, computed: {computed_kl:.6f})")
-            
-            if current_kl < 1e-8:
-                print(f"CRITICAL: KL divergence is {current_kl:.2e} at epoch {epoch+1}")
-                print("Possible issues:")
-                print("- Probabilistic layers not sampling during training")
-                print("- KL computation method has bugs")
-                print("- Learning rate too low for probabilistic updates")
+            # Debug KL periodically (less frequent for long training)
+            if debug_mode and ((epoch+1) % max(10, train_epochs//10) == 0):
+                current_kl = debug_kl_components(net, epoch+1, verbose=True)
                 
-                # Additional debugging for zero KL
-                print(f"\n=== Zero KL Debugging ===")
-                print("Checking if layers are actually probabilistic:")
-                for name, module in net.named_modules():
-                    if hasattr(module, 'weight') and hasattr(module.weight, 'sigma'):
-                        sigma_mean = module.weight.sigma.mean().item()
-                        print(f"{name} sigma mean: {sigma_mean:.8f}")
-        
-        if verbose_test and ((epoch+1) % 5 == 0):
-            train_obj, risk_ntuple, empirical_risk_ntuple, pseudo_accuracy, kl_per_n = computeRiskCertificatesReID(
-                net, bound, val_bound, device=device, lambda_var=lambda_var)
+                if current_kl < 1e-8:
+                    print(f"\nRITICAL: KL divergence collapsed to {current_kl:.2e} at epoch {epoch+1}")
+                    print("Training likely failed - consider:")
+                    print("- Reducing learning rate")
+                    print("- Increasing sigma_prior")
+                    print("- Checking gradient flow")
+                    break
+            
+            # Periodic evaluation (less frequent for publication runs)
+            if verbose_test and ((epoch+1) % max(20, train_epochs//5) == 0):
+                try:
+                    train_obj, risk_ntuple, empirical_risk_ntuple, pseudo_accuracy, kl_per_n = computeRiskCertificatesReID(
+                        net, bound, val_bound, device=device, lambda_var=None)
+                    stch_risk, stch_acc = testStochasticReID(net, test_loader, bound, device=device)
+                    
+                    print(f"\n*** Checkpoint Epoch {epoch+1} ***")
+                    print(f"KL/n: {kl_per_n:.6f}, Pseudo acc: {pseudo_accuracy:.3f}")
+                    print(f"Stochastic: risk={stch_risk:.3f}, acc={stch_acc:.3f}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Evaluation failed at epoch {epoch+1}: {e}")
+                    
+        except Exception as e:
+            print(f"Training failed at epoch {epoch+1}: {e}")
+            import traceback
+            traceback.print_exc()
+            break
 
-            stch_risk, stch_acc = testStochasticReID(net, test_loader, bound, device=device)
-            post_risk, post_acc = testPosteriorMeanReID(net, test_loader, bound, device=device)
-            ens_risk, ens_acc = testEnsembleReID(net, test_loader, bound, device=device, samples=samples_ensemble)
+    # Final evaluation with publication-level MC sampling
+    print("\n=== Final Publication-Level Evaluation ===")
+    try:
+        train_obj, risk_ntuple, empirical_risk_ntuple, pseudo_accuracy, kl_per_n = computeRiskCertificatesReID(
+            net, bound, val_bound, device=device, lambda_var=None)
+        stch_risk, stch_acc = testStochasticReID(net, test_loader, bound, device=device)
+        post_risk, post_acc = testPosteriorMeanReID(net, test_loader, bound, device=device)
+        ens_risk, ens_acc = testEnsembleReID(net, test_loader, bound, device=device, samples=samples_ensemble)
 
         # Results summary
         print(f"\n*** Final Publication Results ***")
