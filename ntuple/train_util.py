@@ -1,133 +1,31 @@
 import torch
 import numpy as np
-import math  # Add missing import
+import math
 from torch import nn
 from torch.nn import functional as F
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm, trange
 from torch.utils.data import DataLoader
-import torch.optim as optim  # Add missing import
+import torch.optim as optim
+import os
 
-from data_gen.cifar10 import CIFAR10NTupleDataset
-from data_gen.mnist import MNISTTupleDataset
+# Add error handling for missing modules
+try:
+    from data_gen.cifar10 import CIFAR10NTupleDataset
+    from data_gen.mnist import MNISTTupleDataset
+except ImportError as e:
+    print(f"Warning: Could not import data modules: {e}")
+    print("Make sure data_gen module is in your Python path")
+
 from boundsntuple import PBBobj_NTuple
 from losses import GeneralizedTripletLoss
 from nets import ReIDCNNet4l, ReIDCNNet9l, ReIDCNNet13l, ReIDCNNet15l
 from probnets import ProbReIDCNNet4l, ProbReIDCNNet9l, ProbReIDCNNet13l, ProbReIDCNNet15l, ProbReIDNet4l
 from tests.testnets import trainReIDNet, trainProbReIDNet, testReIDNet, testStochasticReID, testPosteriorMeanReID, testEnsembleReID, computeRiskCertificatesReID
+from tests.testtrain import debug_probabilistic_init, debug_kl_components, validate_ntuple_loss
 
 
-def debug_probabilistic_init(net):
-    """Debug probabilistic layer initialization"""
-    print("\n=== Probabilistic Layer Initialization Debug ===")
-    for name, module in net.named_modules():
-        if hasattr(module, 'weight') and hasattr(module.weight, 'mu'):
-            weight_mu_mean = module.weight.mu.mean().item()
-            weight_sigma_mean = module.weight.sigma.mean().item()
-            prior_mu_mean = module.weight_prior.mu.mean().item()
-            prior_sigma_mean = module.weight_prior.sigma.mean().item()
-            
-            print(f"{name}:")
-            print(f"  Weight μ: {weight_mu_mean:.6f}, σ: {weight_sigma_mean:.6f}")
-            print(f"  Prior μ: {prior_mu_mean:.6f}, σ: {prior_sigma_mean:.6f}")
-            print(f"  Difference: {abs(weight_mu_mean - prior_mu_mean):.6f}")
-
-# Add debugging utilities
-def debug_kl_components(net, epoch, verbose=True):
-    """Debug KL divergence components for probabilistic networks"""
-    if hasattr(net, 'compute_kl'):
-        total_kl = net.compute_kl()
-        
-        if verbose:
-            print(f"\n=== KL Debug Info (Epoch {epoch}) ===")
-            print(f"Total KL: {total_kl:.6f}")
-            
-            # Check individual layer KL if available
-            for name, module in net.named_modules():
-                if hasattr(module, 'kl_div'):
-                    print(f"{name} KL: {module.kl_div:.6f}")
-            
-            # Check if KL is suspiciously zero
-            if total_kl < 1e-8:
-                print("WARNING: KL divergence is essentially zero!")
-                print("This suggests probabilistic layers aren't sampling properly.")
-        
-        return total_kl
-    return 0.0
-
-# In train_util.py, add this after debug_kl_components function
-def debug_kl_computation(net):
-    """Debug individual layer KL values and compare with compute_kl()"""
-    total_kl = 0
-    print("\n=== Individual KL Computation Debug ===")
-    for name, module in net.named_modules():
-        if hasattr(module, 'kl_div'):
-            kl_val = module.kl_div
-            if hasattr(kl_val, 'item'):
-                kl_val = kl_val.item()
-            print(f"{name}: {kl_val:.8f}")
-            total_kl += kl_val
-    
-    compute_kl_val = net.compute_kl()
-    if hasattr(compute_kl_val, 'item'):
-        compute_kl_val = compute_kl_val.item()
-    
-    print(f"Manual KL sum: {total_kl:.8f}")
-    print(f"compute_kl(): {compute_kl_val:.8f}")
-    print(f"Difference: {abs(total_kl - compute_kl_val):.8f}")
-    
-    # Check for inconsistencies
-    if abs(total_kl - compute_kl_val) > 1e-6:
-        print("⚠️  WARNING: Manual sum doesn't match compute_kl()!")
-        print("This suggests an issue with the compute_kl() implementation.")
-    
-    return total_kl, compute_kl_val
-
-
-def validate_ntuple_loss(data_loader, device, verbose=True):
-    """Validate N-tuple loss function with sample data"""
-    if verbose:
-        print("\n=== N-tuple Loss Validation ===")
-    
-    try:
-        for batch_idx, data in enumerate(data_loader):
-            if batch_idx > 0:  # Only check first batch
-                break
-                
-            if isinstance(data, (list, tuple)) and len(data) == 2:  # (data, labels)
-                inputs, labels = data
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-                
-                if verbose:
-                    print(f"Input shape: {inputs.shape}")
-                    print(f"Labels shape: {labels.shape}")
-                    print(f"Unique labels: {torch.unique(labels)}")
-                    
-            elif isinstance(data, torch.Tensor):  # Direct tensor input
-                inputs = data.to(device)
-                
-                if verbose:
-                    print(f"Input tensor shape: {inputs.shape}")
-                    
-            else:  # Handle other data formats
-                inputs = data
-                if hasattr(inputs, 'to'):
-                    inputs = inputs.to(device)
-                    
-                if verbose:
-                    print(f"Data type: {type(inputs)}")
-                    if hasattr(inputs, 'shape'):
-                        print(f"Shape: {inputs.shape}")
-            
-            break
-            
-    except Exception as e:
-        if verbose:
-            print(f"Error in data validation: {e}")
-            print("This might indicate issues with data loading or format")
-
-def train_deterministic_baseline(name_data, N, learning_rate, momentum, 
+def train_deterministic_baseline(name_data, N, learning_rate, momentum,
                                layers, train_epochs, batch_size, embedding_dim,
                                dropout_prob, perc_train, device, verbose=True):
     """Train a deterministic baseline to establish performance expectations"""
@@ -141,10 +39,10 @@ def train_deterministic_baseline(name_data, N, learning_rate, momentum,
     # Data loading (simplified for baseline)
     if name_data == 'cifar10':
         train_dataset = CIFAR10NTupleDataset(
-            train=True, num_negatives=N-2, samples_per_class=int(600 * perc_train)
+            train=True, num_negatives=N-2, samples_per_class=int(1500 * perc_train)
         )
         test_dataset = CIFAR10NTupleDataset(
-            train=False, num_negatives=N-2, samples_per_class=100
+            train=False, num_negatives=N-2, samples_per_class=300
         )
     elif name_data == 'mnist':
         train_dataset = MNISTTupleDataset(
@@ -196,67 +94,95 @@ def train_deterministic_baseline(name_data, N, learning_rate, momentum,
     
     return net, final_error, final_acc
 
+
+
 def runexp(name_data, objective, model, N, sigma_prior, pmin, learning_rate,
            momentum, learning_rate_prior=0.01, momentum_prior=0.9,
-           delta=0.025, layers=4, delta_test=0.01, mc_samples=1000, samples_ensemble=100,
+           delta=0.025, layers=4, delta_test=0.01, mc_samples=1000, samples_ensemble=1000,
            kl_penalty=1, initial_lamb=6.0, train_epochs=100, prior_dist='gaussian', 
-           verbose=False, device='cuda', prior_epochs=20, dropout_prob=0.2, perc_train=1.0, verbose_test=False, 
-           perc_prior=0.2, batch_size=64, embedding_dim=256, run_baseline=True, debug_mode=True):
-    """Run an N-tuple PAC-Bayes experiment for metric learning with enhanced debugging"""
+           verbose=False, device='cuda', prior_epochs=20, dropout_prob=0.2, perc_train=1.0, 
+           verbose_test=False, perc_prior=0.2, batch_size=128, embedding_dim=256, 
+           run_baseline=True, debug_mode=True, random_seed=None):
+    """Enhanced runexp with publication-level parameters and random seed support"""
 
-    # Set seeds for reproducibility
-    torch.manual_seed(7)
-    np.random.seed(0)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    loss_fn = GeneralizedTripletLoss(margin=0.3, strategy='hardest', reduction='mean')
+    if random_seed is not None:
+        torch.manual_seed(random_seed)
+        np.random.seed(random_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        # Default reproducible seed
+        torch.manual_seed(42)
+        np.random.seed(42)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-    print(f"\n=== Starting N-tuple PAC-Bayes Experiment ===")
+    print(f"\n=== Starting Publication-Level N-tuple PAC-Bayes Experiment ===")
     print(f"Dataset: {name_data}, Model: {model}, N: {N}, Layers: {layers}")
     print(f"Sigma Prior: {sigma_prior}, Learning Rate: {learning_rate}")
+    print(f"Objective: {objective}, KL Penalty: {kl_penalty}")
+    print(f"Publication Parameters: batch_size={batch_size}, mc_samples={mc_samples}, epochs={train_epochs}")
+
+    # Validate inputs
+    if objective not in ['fquad', 'fclassic', 'ntuple', 'nested_ntuple']:
+        raise ValueError(f"Unsupported objective: {objective}")
     
-    # Run deterministic baseline first
+    if device == 'cuda' and not torch.cuda.is_available():
+        print("CUDA not available, switching to CPU")
+        device = 'cpu'
+
+    # Run baseline if requested
+    baseline_acc = 0.0
+    errornet0 = 1.0
     if run_baseline:
-        baseline_net, baseline_error, baseline_acc = train_deterministic_baseline(
-            name_data, N, learning_rate * 10,  # Higher LR for baseline
-            momentum, layers, min(train_epochs, 20), batch_size, 
-            embedding_dim, dropout_prob, perc_train, device, verbose
-        )
-        
-        if baseline_acc < 0.6:  # Poor baseline performance
-            print(f"\nWARNING: Baseline performance is poor (acc={baseline_acc:.3f})")
-            print("Consider:")
-            print("- Increasing learning rate")
-            print("- Checking data loading/preprocessing")
-            print("- Verifying loss function implementation")
+        try:
+            baseline_net, baseline_error, baseline_acc = train_deterministic_baseline(
+                name_data, N, learning_rate * 3,  # Conservative LR boost for baseline
+                momentum, layers, min(train_epochs//5, 20), batch_size, 
+                embedding_dim, dropout_prob, perc_train, device, verbose
+            )
+            
+            if baseline_acc < 0.5:
+                print(f"\nWARNING: Baseline performance is poor (acc={baseline_acc:.3f})")
+                print("This might indicate fundamental issues with:")
+                print("- Data loading or preprocessing")
+                print("- Loss function implementation") 
+                print("- Network architecture")
+                print("Consider debugging these before proceeding with PAC-Bayes training")
 
-    # Data loading
-    if name_data == 'cifar10':
-        # Training set
-        full_train_dataset = CIFAR10NTupleDataset(
-            train=True, num_negatives=N-2, samples_per_class=int(600 * perc_train)
-        )
-        # Test set
-        test_dataset = CIFAR10NTupleDataset(
-            train=False, num_negatives=N-2, samples_per_class=100
-        )
-        
-    elif name_data == 'mnist':
-        # Training set
-        full_train_dataset = MNISTTupleDataset(
-            train=True, samples_per_class=int(600 * perc_train)
-        )
-        # Test set
-        test_dataset = MNISTTupleDataset(
-            train=False, samples_per_class=100
-        )
-    else:
-        raise ValueError(f"Unsupported dataset: {name_data}")
+                
+        except Exception as e:
+            print(f"Baseline training failed: {e}")
+            baseline_acc = 0.0
 
-    # Split training data for prior/posterior if needed
+    # Data loading with better error handling
+    try:
+        if name_data == 'cifar10':
+            full_train_dataset = CIFAR10NTupleDataset(
+                train=True, num_negatives=N-2, samples_per_class=int(1500 * perc_train)
+            )
+            test_dataset = CIFAR10NTupleDataset(
+                train=False, num_negatives=N-2, samples_per_class=300
+            )
+        elif name_data == 'mnist':
+            full_train_dataset = MNISTTupleDataset(
+                train=True, samples_per_class=int(1000 * perc_train)
+            )
+            test_dataset = MNISTTupleDataset(
+                train=False, samples_per_class=1000
+            )
+        else:
+            raise ValueError(f"Unsupported dataset: {name_data}")
+    except Exception as e:
+        print(f"Data loading failed: {e}")
+        return None
+
+    # Split data for prior/posterior
     total_train_size = len(full_train_dataset)
     prior_size = int(total_train_size * perc_prior)
     posterior_size = total_train_size - prior_size
+
+    print(f"Dataset sizes: Total={total_train_size}, Prior={prior_size}, Posterior={posterior_size}")
 
     if perc_prior > 0:
         prior_dataset, posterior_dataset = torch.utils.data.random_split(
@@ -635,11 +561,12 @@ if __name__ == "__main__":
             
     except Exception as e:
         print(f"\nExperiment failed with error: {e}")
-        print("This might be due to:")
+        print("\nThis might be due to:")
+        print("- Insufficient GPU memory for publication-level parameters")
         print("- Missing dependencies or imports")
         print("- Data loading issues")
         print("- Model architecture mismatches")
-        print("- Device compatibility problems")
+        
         import traceback
         traceback.print_exc()
         
