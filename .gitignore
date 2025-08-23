@@ -42,4 +42,4 @@ wandb/
 checkpoints/
 
 # Research and experimental files
-cuhk03/research/
+cuhk03/research/.env
