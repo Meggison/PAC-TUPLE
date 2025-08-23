@@ -38,6 +38,7 @@ Thumbs.db
 *.pt
 logs/
 runs/
+wandb/
 checkpoints/
 
 # Research and experimental files
