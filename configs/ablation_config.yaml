@@ -1,0 +1,217 @@
+# PAC-Bayes Publication-Level Ablation Study Configuration
+# Single comprehensive configuration file for all ablation experiments
+
+# Base configuration - your winning hyperparameter setup
+base_config:
+  name_data: 'cifar10'
+  model: 'cnn'
+  N: 3  # Will be varied in N-tuple experiments
+  sigma_prior: 0.01       
+  pmin: 1e-4
+  learning_rate: 0.005     
+  momentum: 0.9
+  learning_rate_prior: 0.01
+  momentum_prior: 0.9
+  delta: 0.025
+  layers: 4
+  delta_test: 0.01
+  mc_samples: 1000        
+  samples_ensemble: 200    =
+  kl_penalty: 1e-6         # From your winning experiments
+  train_epochs: 50         # Increased for final results
+  prior_dist: 'gaussian'
+  device: 'cuda'
+  prior_epochs: 30
+  dropout_prob: 0.2
+  perc_train: 1.0
+  perc_prior: 0.3
+  batch_size: 32
+  embedding_dim: 128       # Your successful configuration
+  objective: 'nested_ntuple'      # Your best objective
+  verbose: false
+  verbose_test: false
+  run_baseline: false
+
+# Statistical reliability settings
+random_seeds: [42]  # Multiple seeds for statistical significance
+
+# WandB integration
+wandb_settings:
+  use_wandb: true
+  project: 'pac-bayes-publication-ablation'
+  entity: null  # Will use default from .env
+
+# Experiment configurations - Enable/disable different study types
+experiments:
+  
+  # 🆕 N-tuple Size Analysis (Your Request)
+  ntuple_sizes:
+    enabled: true
+    description: "Test different N-tuple sizes (N=3,4,5,6)"
+    estimated_time_hours: 2
+    parameters:
+      N_values: [3, 4, 5, 6]
+      # Use optimized hyperparameters for this study
+      overrides:
+        sigma_prior: 0.01
+        kl_penalty: 1e-6
+        learning_rate: 0.005
+        train_epochs: 50
+        mc_samples: 1000
+  
+  # Training Objectives Comparison
+  training_objectives:
+    enabled: true
+    description: "Compare different PAC-Bayes training objectives"
+    estimated_time_hours: 3
+    parameters:
+      objectives: ['fquad', 'fclassic', 'ntuple', 'nested_ntuple', 'theory_ntuple']
+      # Optimized settings for objective comparison
+      overrides:
+        sigma_prior: 0.01
+        kl_penalty: 1e-6
+        train_epochs: 30
+        mc_samples: 1000
+  
+  # Winning Hyperparameter Refinement
+  hyperparameter_refinement:
+    enabled: true
+    description: "Refine around your winning hyperparameters (74.6% accuracy)"
+    estimated_time_hours: 4
+    parameters:
+      # Grid search around winning values
+      sigma_prior_values: [0.005, 0.01, 0.02, 0.05]
+      learning_rate_values: [0.001, 0.005, 0.01]
+      kl_penalty_values: [5e-7, 1e-6, 5e-6]
+      embedding_dim_values: [128, 256]
+      train_epochs_values: [30, 50]
+      n_combinations: 16  # Systematic sampling for manageable runtime
+      reduced_seeds: [42, 123]  # Use fewer seeds for grid search
+  
+  # Architecture Scaling Analysis
+  architecture_scaling:
+    enabled: true
+    description: "Compare different network architectures"
+    estimated_time_hours: 2
+    parameters:
+      architectures:
+        - {layers: 4, embedding_dim: 128}
+        - {layers: 9, embedding_dim: 256}
+        - {layers: 13, embedding_dim: 256}
+      # Fixed hyperparameters for fair comparison
+      overrides:
+        sigma_prior: 0.01
+        kl_penalty: 1e-6
+        train_epochs: 30
+        mc_samples: 1000
+      reduced_seeds: [42, 123]  # 2 seeds per architecture
+  
+  # Prior Analysis (Data-dependent vs Random)
+  prior_analysis:
+    enabled: true
+    description: "Effect of data-dependent vs random priors"
+    estimated_time_hours: 2
+    parameters:
+      prior_configurations:
+        - {perc_prior: 0.0, prior_type: 'random'}
+        - {perc_prior: 0.1, prior_type: 'learned'}
+        - {perc_prior: 0.2, prior_type: 'learned'}
+        - {perc_prior: 0.5, prior_type: 'learned'}
+        - {perc_prior: 0.7, prior_type: 'learned'}
+      # Extended training for prior effects
+      overrides:
+        sigma_prior: 0.01
+        kl_penalty: 1e-6
+        train_epochs: 40
+      reduced_seeds: [42, 123]
+
+# Output and analysis settings
+output_settings:
+  results_directory: 'publication_ablation_results'
+  save_formats: ['csv', 'json', 'tex']  # CSV for analysis, JSON for details, LaTeX for publication
+  generate_plots: true
+  statistical_analysis: true
+  
+  # Publication-ready output
+  publication_outputs:
+    latex_summary: true
+    statistical_tests: true  # ANOVA, significance tests
+    best_configurations: true
+    comparative_tables: true
+
+# Advanced settings
+advanced:
+  # Parallel execution (if supported)
+  max_parallel_experiments: 1  # Set >1 if you have multiple GPUs
+  
+  # Error handling
+  continue_on_error: true  # Continue ablation even if some experiments fail
+  max_retries: 2  # Retry failed experiments
+  
+  # Memory management
+  clear_cuda_cache: true  # Clear CUDA cache between experiments
+  
+  # Logging
+  detailed_logging: true
+  log_level: 'INFO'
+
+# Expected results and validation
+validation:
+  # Quality thresholds for flagging results
+  min_accuracy: 0.5  # Flag experiments with very low accuracy
+  max_risk_certificate: 2.0  # Flag experiments with very poor bounds
+  min_kl_divergence: 1e-7  # Flag experiments with suspiciously low KL
+  
+  # Expected performance ranges (based on your previous results)
+  expected_ranges:
+    stochastic_accuracy: [0.6, 0.8]  # Based on your 74.6% result
+    risk_certificate: [0.1, 1.0]     # Aim for non-vacuous bounds
+    kl_per_n: [1e-6, 1e-2]          # Reasonable KL range
+
+# Study presets for easy selection
+presets:
+  ntuple_only:
+    description: "N-tuple size analysis only (2 hours)"
+    experiments: ['ntuple_sizes']
+    
+  objectives_only:
+    description: "Training objectives comparison only (3 hours)"
+    experiments: ['training_objectives']
+    
+  hyperparams_only:
+    description: "Hyperparameter refinement only (4 hours)"
+    experiments: ['hyperparameter_refinement']
+    
+  architecture_only:
+    description: "Architecture scaling analysis only (2 hours)"
+    experiments: ['architecture_scaling']
+    
+  full_study:
+    description: "Complete publication-level ablation study (8+ hours)"
+    experiments: ['ntuple_sizes', 'training_objectives', 'hyperparameter_refinement', 
+                 'architecture_scaling', 'prior_analysis']
+
+# Metadata
+metadata:
+  created_date: "2025-08-23"
+  author: "PAC-Bayes Ablation Study Generator"
+  version: "1.0"
+  description: "Comprehensive ablation study configuration for PAC-Bayes N-tuple metric learning"
+  paper_target: "Publication-ready results for PAC-Bayes metric learning"
+  
+  # Your specific research focus
+  research_focus:
+    - "N-tuple size optimization (N=3,4,5,6)"
+    - "Training objective comparison"
+    - "Hyperparameter refinement around winning configuration"
+    - "Architecture scaling effects"
+    - "Prior learning vs random initialization"
+    
+  # Key metrics to track
+  key_metrics:
+    - "risk_certificate"      # PAC-Bayes bound tightness
+    - "stochastic_accuracy"    # Main performance metric
+    - "kl_per_n"              # KL divergence per sample
+    - "training_objective"     # Final training loss
+    - "map_score"             # Mean Average Precision
+    - "rank1_accuracy"        # Rank-1 identification rate

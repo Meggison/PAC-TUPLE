@@ -1,0 +1,88 @@
+# PAC-Bayes ReID Experiment Configuration
+# Single source of truth for all experimental parameters
+
+experiment:
+  name: "pac-bayes-reid"
+  description: "PAC-Bayes N-tuple metric learning for person re-identification"
+  random_seed: 42
+  device: "cuda"  # "cuda" or "cpu"
+  debug_mode: true
+  verbose: true
+  verbose_test: true
+
+# Dataset configuration
+data:
+  name: "cifar10"  # "cifar10" or "mnist"
+  N: 3  # N-tuple size (anchor + positive + N-2 negatives)
+  perc_train: 1.0  # Percentage of training data to use
+  perc_prior: 0.4  # Percentage of training data for prior (paper standard)
+  batch_size: 250  # Paper's exact value
+
+# Model architecture
+model:
+  type: "cnn"  # "cnn" or "fcn"
+  layers: 4  # 4, 9, 13, or 15 for CNN
+  embedding_dim: 128  # Your successful configuration
+  dropout_prob: 0.2
+
+# PAC-Bayes parameters
+pac_bayes:
+  objective: "theory_ntuple"  # Paper's best objective
+  sigma_prior: 0.1  # Prior stddev  
+  pmin: 0.00001  # 1e-5
+  delta: 0.025
+  delta_test: 0.01
+  kl_penalty: 0.000001  # 1e-6, Your breakthrough value
+  prior_dist: "gaussian"
+  initial_lamb: 6.0 # Initial lambda for KL penalty (not currently used)
+
+# Training configuration
+training:
+  train_epochs: 50 # training epochs
+  prior_epochs: 30  # prior cnn training epochs
+  learning_rate: 0.005  
+  momentum: 0.9
+  learning_rate_prior: 0.01 # prior cnn learning rate
+  momentum_prior: 0.9
+  run_baseline: true
+
+# Evaluation parameters
+evaluation:
+  mc_samples: 1000  # Monte Carlo samples for evaluation
+  samples_ensemble: 1000  # Ensemble size for predictions
+
+# Weights & Biases configuration
+wandb:
+  enabled: true
+  project: "pac-bayes-reid-experiments"
+  entity: "ojm460-university-of-birmingham"  # Your wandb username/team (optional)
+  tags:
+    - "pac-bayes"
+    - "metric-learning"
+    - "reid"
+
+# Preset experiment configurations for specific use cases
+presets:
+  # Quick test with reduced parameters
+  quick:
+    experiment:
+      name: "quick-test"
+    training:
+      train_epochs: 3
+      prior_epochs: 2
+    evaluation:
+      mc_samples: 50
+      samples_ensemble: 100
+    wandb:
+      enabled: false
+      
+  # Extended training for final results
+  extended:
+    experiment:
+      name: "extended-training"
+    training:
+      train_epochs: 100
+      prior_epochs: 50
+    evaluation:
+      mc_samples: 1500
+      samples_ensemble: 3000
