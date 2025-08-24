@@ -178,6 +178,7 @@ class PBBobj_NTuple():
             if tuple_size is None:
                 tuple_size = self.tuple_size if self.tuple_size is not None else 3  # Use stored or default
                 print(f"Warning: ntuple using tuple_size = {tuple_size}")
+                tuple_size = 3  # Default for triplet
                 
             # ✅ More stable computation
             effective_train_size = torch.tensor(max(1, train_size), dtype=torch.float32, device=self.device)
@@ -194,6 +195,7 @@ class PBBobj_NTuple():
             if tuple_size is None:
                 tuple_size = self.tuple_size if self.tuple_size is not None else 3  # Use stored or default
                 print(f"Warning: nested_ntuple using tuple_size = {tuple_size}")
+                tuple_size = 3  # Default for triplet
                 
             # ✅ Combinatorial complexity calculation
             if tuple_size is not None and tuple_size <= self.n_bound:
