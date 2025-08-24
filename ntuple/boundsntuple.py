@@ -421,6 +421,42 @@ class PBBobj_NTuple():
         
         return train_obj.item(), risk_nt, empirical_risk_nt, pseudo_accuracy, kl_value / train_size
 
+    # Helper functions for theory_ntuple bound
+    def _floor_div_t(self, a, b):
+        # differentiable-friendly floor(n/m); we only need a positive scalar tensor
+        t_a = torch.tensor(float(a), dtype=torch.float32, device=self.device)
+        t_b = torch.tensor(float(b), dtype=torch.float32, device=self.device)
+        # use floor on the Python value; clamp to >=1 to avoid div-by-zero
+        val = max(1, int(float(a) // float(b)))
+        return torch.tensor(float(val), dtype=torch.float32, device=self.device)
+
+    def _log_C_plus_one(self, n_val, m_val):
+        # log( C(n, m) + 1 )
+        n_t = torch.tensor(float(n_val), dtype=torch.float32, device=self.device)
+        m_t = torch.tensor(float(m_val), dtype=torch.float32, device=self.device)
+        # Use lgamma on float32; we assume n_val, m_val are reasonable (>= m_val >= 1)
+        log_C = (torch.lgamma(n_t + 1.0) - torch.lgamma(m_t + 1.0) - torch.lgamma(n_t - m_t + 1.0))
+        # log(exp(log_C)+1)
+        return torch.log(torch.exp(log_C) + 1.0)
+
+    def _theory_pac_term(self, kl, n_for_bound, tuple_size, delta):
+        """
+        Returns the theoretical PAC term:
+        [ KL + ln((C(n,m)+1)/δ) ] / (2 * floor(n/m))
+        using the same n in both C(n,m) and floor(n/m).
+        """
+        # log(C(n,m)+1)
+        logC1 = self._log_C_plus_one(n_for_bound, tuple_size)
+        # ln(1/δ)
+        log_inv_delta = torch.log(torch.tensor(1.0/float(delta), dtype=torch.float32, device=self.device))
+        # numerator: KL + log(C(n,m)+1) + ln(1/δ)
+        if not torch.is_tensor(kl):
+            kl = torch.tensor(float(kl), dtype=torch.float32, device=self.device)
+        num = kl + (logC1 + log_inv_delta)
+        # denominator: 2 * floor(n/m)
+        denom = 2.0 * self._floor_div_t(n_for_bound, tuple_size)
+        return num / denom
+
 
     def debug_bound_computation(self, net, batch, train_size):
         """Debug method to check bound computation"""
