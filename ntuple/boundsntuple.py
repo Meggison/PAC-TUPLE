@@ -32,7 +32,7 @@ class PBBobj_NTuple():
     """PAC-Bayes bound class for probabilistic networks with N-tuple/metric losses."""
     def __init__(self, objective='fquad', pmin=1e-4, delta=0.025,
                  delta_test=0.01, mc_samples=1000, kl_penalty=1, device='cuda',
-                 n_posterior=30000, n_bound=30000):
+                 n_posterior=30000, n_bound=30000, tuple_size=None):
         self.objective = objective
         self.pmin = pmin
         self.delta = delta
@@ -42,6 +42,7 @@ class PBBobj_NTuple():
         self.device = device
         self.n_posterior = n_posterior
         self.n_bound = n_bound
+        self.tuple_size = tuple_size  # Store the intended tuple size
         self.loss_fn = GeneralizedTripletLoss()  # Default loss function, can be changed later
 
 
@@ -175,7 +176,8 @@ class PBBobj_NTuple():
             # ✅ FIX: Simplified and more stable n-tuple bound
             # Use standard PAC-Bayes bound but adjusted for tuple structure
             if tuple_size is None:
-                tuple_size = 3  # Default for triplet
+                tuple_size = self.tuple_size if self.tuple_size is not None else 3  # Use stored or default
+                print(f"Warning: ntuple using tuple_size = {tuple_size}")
                 
             # ✅ More stable computation
             effective_train_size = torch.tensor(max(1, train_size), dtype=torch.float32, device=self.device)
@@ -190,7 +192,8 @@ class PBBobj_NTuple():
         elif self.objective == 'nested_ntuple':
             # ✅ NEW: Combinatorial n-tuple bound with proper complexity modeling
             if tuple_size is None:
-                tuple_size = 3  # Default for triplet
+                tuple_size = self.tuple_size if self.tuple_size is not None else 3  # Use stored or default
+                print(f"Warning: nested_ntuple using tuple_size = {tuple_size}")
                 
             # ✅ Combinatorial complexity calculation
             if tuple_size is not None and tuple_size <= self.n_bound:
@@ -215,13 +218,36 @@ class PBBobj_NTuple():
             kl_ratio = (kl + log_delta_term) / effective_size_tensor
             
             return empirical_risk + torch.sqrt(kl_ratio)
-
+        
+        elif self.objective == 'theory_ntuple':
+            if tuple_size is None:
+                tuple_size = self.tuple_size if self.tuple_size is not None else 3  # Use stored or default
+                print(f"Warning: theory_ntuple using tuple_size = {tuple_size}")
             
+            # Ensure tensors on correct device
+            if not torch.is_tensor(empirical_risk):
+                empirical_risk = torch.tensor(empirical_risk, dtype=torch.float32, requires_grad=True, device=self.device)
+            if not torch.is_tensor(kl):
+                kl = torch.tensor(float(kl), dtype=torch.float32, device=self.device)
+            kl = kl * self.kl_penalty
+
+            # Use the same n in both C(n,m) and floor(n/m). We take the bound set size for n.
+            # You can switch to train_size if that is how your derivation defines n.
+            n_for_bound = float(self.n_bound)
+
+            # The exact PAC term from your theory:
+            pac_term = self._theory_pac_term(kl, n_for_bound=n_for_bound, tuple_size=float(tuple_size), delta=self.delta)
+
+            # f_obj = empirical_risk + pac_term^{1/2}? NO — your printed f_obj is linear in the term,
+            # not a sqrt. The training-time objective from your formula is:
+            #   R_S^{CE}(q) + ( KL + ln((C(n,m)+1)/δ) ) / (2 floor(n/m))
+            # i.e., add the term directly (no sqrt).
+            return empirical_risk + pac_term
+        
         
         else:
             # ✅ Remove overly complex objectives for now
-            raise ValueError(f"Objective {self.objective} not supported. Use 'fquad', 'fclassic', 'ntuple', or 'nested_ntuple'")
-        
+            raise ValueError(f"Objective {self.objective} not supported. Use 'fquad', 'fclassic', 'ntuple', or 'nested_ntuple' or 'theory_ntuple'.")
 
 
 
@@ -338,6 +364,22 @@ class PBBobj_NTuple():
     
     def compute_final_stats_risk(self, net, data_loader, train_size):
         """Compute final statistics for risk and KL divergence."""
+
+        # Get tuple_size: first try stored value, then try to infer from data
+        if self.tuple_size is not None:
+            tuple_size = self.tuple_size
+            print(f"Using stored tuple_size: {tuple_size}")
+        else:
+            try:
+                # Create a fresh iterator to avoid consuming the original data_loader
+                data_iter = iter(data_loader)
+                first_batch = next(data_iter)
+                tuple_size = self.get_tuple_size(first_batch)
+                print(f"Inferred tuple_size from data: {tuple_size}")
+            except Exception as e:
+                # Fallback: assume typical triplet setup (anchor + positive + 1 negative = 3)
+                tuple_size = 3
+                print(f"Warning: Could not determine tuple_size from data_loader (error: {e}), using default: {tuple_size}")
         
         kl = net.compute_kl()
         
