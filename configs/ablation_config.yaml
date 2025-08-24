@@ -16,7 +16,7 @@ base_config:
   layers: 4
   delta_test: 0.01
   mc_samples: 1000        
-  samples_ensemble: 200    =
+  samples_ensemble: 200
   kl_penalty: 1e-6         # From your winning experiments
   train_epochs: 50         # Increased for final results
   prior_dist: 'gaussian'
