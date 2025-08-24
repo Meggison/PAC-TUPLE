@@ -409,7 +409,7 @@ class PBBobj_NTuple():
         
         # ✅ Convert to tensor for bound computation
         empirical_risk_tensor = torch.tensor(empirical_risk_nt, dtype=torch.float32, device=self.device)
-        train_obj = self.bound(empirical_risk_tensor, kl, self.n_posterior)
+        train_obj = self.bound(empirical_risk_tensor, kl, self.n_posterior, tuple_size)
         
         # Final risk certificate
         bound_term = (kl_value + np.log((2 * np.sqrt(self.n_bound))/self.delta_test))/self.n_bound
