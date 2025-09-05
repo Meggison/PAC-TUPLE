@@ -50,16 +50,9 @@ pac_bayes:
   kl_penalty: 0.000001
   
 training:
-  train_epochs: 50
+  train_epochs: 30
   learning_rate: 0.005
 ```
-
-### Benefits
-- ✅ **Single configuration file** - No duplicate parameters
-- ✅ **Easy parameter changes** - Modify once, use everywhere  
-- ✅ **Runtime overrides** - Quick parameter adjustments
-- ✅ **Preset variations** - Common configurations pre-defined
-- ✅ **Validation** - Catch configuration errors early
 
 ## Wandb Integration
 
