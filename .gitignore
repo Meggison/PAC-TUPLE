@@ -48,3 +48,6 @@ cuhk03/research/.env
 data/cifar-10-python.tar.gz
 data/cifar-10-batches-py/
 *.tar.gz
+
+# research papers
+research/papers/*.pdf
