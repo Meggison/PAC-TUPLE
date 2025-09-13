@@ -46,7 +46,7 @@ def load_env_config() -> Dict[str, Optional[str]]:
     return config
 
 class WandbLogger:
-    """Production-ready Weights & Biases logger for PAC-Bayes experiments."""
+    """Weights & Biases logger for PAC-Bayes experiments."""
     
     def __init__(self, use_wandb: bool = True):
         self.use_wandb = use_wandb and WANDB_AVAILABLE
@@ -255,9 +255,8 @@ class WandbLogger:
         N = config.get('N', 0)
         sigma = config.get('sigma_prior', 0)
         lr = config.get('learning_rate', 0)
-        kl_penalty = config.get('kl_penalty', 0)
         
-        return f"{objective}_{dataset}_N{N}_σ{sigma:.3f}_lr{lr:.4f}_kl{kl_penalty:.0e}"
+        return f"{objective}_{dataset}_N{N}_σ{sigma:.3f}_lr{lr:.4f}"
     
     def _generate_tags(self, config: Dict[str, Any]) -> list:
         """Generate tags for the experiment."""

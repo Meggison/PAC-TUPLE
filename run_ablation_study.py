@@ -89,7 +89,7 @@ def run_ablation_study(config, enabled_experiments):
         return results
         
     except Exception as e:
-        print(f"\n❌ Error during ablation study: {str(e)}")
+        print(f"\nError during ablation study: {str(e)}")
         print("\nFull traceback:")
         traceback.print_exc()
         return None
@@ -171,12 +171,12 @@ Examples:
     print(f"This will take approximately {estimated_time} hours to complete.")
     confirm = input("Continue with ablation study? (y/N): ")
     if confirm.lower() != 'y':
-        print("❌ Ablation study cancelled.")
+        print("Ablation study cancelled.")
         return
     
     # Record start time
     start_time = datetime.now()
-    print(f"🚀 Starting ablation study at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Starting ablation study at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Run the study
     results = run_ablation_study(config, enabled_experiments)
