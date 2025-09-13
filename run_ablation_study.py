@@ -25,18 +25,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 def print_banner():
     """Print a nice banner for the ablation study"""
     print("="*80)
-    print("🚀 PAC-Bayes Publication-Level Ablation Study Runner")
+    print("PAC-Bayes Ablation Study Runner")
     print("="*80)
     print()
 
 def print_config_summary(config, enabled_experiments):
     """Print a summary of the configuration"""
-    print("📋 Configuration Summary:")
+    print("Configuration Summary:")
     print(f"   Random seeds: {config.get('random_seeds', [42])}")
     print(f"   WandB project: {config.get('wandb_settings', {}).get('project', 'Not specified')}")
     print()
     
-    print("🧪 Enabled experiments:")
+    print("Enabled experiments:")
     total_time = 0
     for exp_name in enabled_experiments:
         if exp_name in config['experiments']:
@@ -45,7 +45,7 @@ def print_config_summary(config, enabled_experiments):
             total_time += time_hours
             print(f"   ✓ {exp_name}: {exp_config.get('description', 'No description')} ({time_hours}h)")
     
-    print(f"\n   ⏱️ Total estimated time: {total_time} hours")
+    print(f"\n  Total estimated time: {total_time} hours")
     print()
 
 def run_ablation_study(config, enabled_experiments):
@@ -129,7 +129,7 @@ Examples:
     # List presets if requested
     if args.list_presets:
         from configs.ablation_config import get_available_presets, get_preset_description
-        print("📋 Available presets:")
+        print("Available presets:")
         for preset in get_available_presets():
             print(f"   {preset}: {get_preset_description(preset)}")
         return
@@ -139,17 +139,17 @@ Examples:
         # Load custom config file
         from configs.ablation_config import load_ablation_config
         config = load_ablation_config(args.config)
-        print(f"📁 Loaded custom configuration from: {args.config}")
+        print(f"Loaded custom configuration from: {args.config}")
     else:
         # Use preset
         from configs.ablation_config import create_preset_config
         config = create_preset_config(args.preset)
-        print(f"⚙️  Using preset: {args.preset}")
+        print(f"Using preset: {args.preset}")
     
     # Override WandB project if specified
     if args.wandb_project:
         config['wandb_settings']['project'] = args.wandb_project
-        print(f"📊 WandB project overridden to: {args.wandb_project}")
+        print(f"WandB project overridden to: {args.wandb_project}")
     
     # Determine enabled experiments
     enabled_experiments = [name for name, exp in config['experiments'].items() if exp.get('enabled', False)]
@@ -158,7 +158,7 @@ Examples:
     print_config_summary(config, enabled_experiments)
     
     if args.dry_run:
-        print("📋 Dry run mode - showing what would be executed:")
+        print("Dry run mode - showing what would be executed:")
         print("   (No experiments will actually run)")
         print("\nRun without --dry-run to execute the ablation study.")
         return
@@ -168,7 +168,7 @@ Examples:
                         for exp in enabled_experiments 
                         if exp in config['experiments'])
     
-    print(f"⚠️  This will take approximately {estimated_time} hours to complete.")
+    print(f"This will take approximately {estimated_time} hours to complete.")
     confirm = input("Continue with ablation study? (y/N): ")
     if confirm.lower() != 'y':
         print("❌ Ablation study cancelled.")
@@ -184,17 +184,17 @@ Examples:
     # Record end time and calculate duration
     end_time = datetime.now()
     duration = end_time - start_time
-    print(f"\n⏰ Study completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"⏱️  Total duration: {duration}")
+    print(f"\nStudy completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total duration: {duration}")
     
     if results:
-        print("\n🎉 Ablation study completed successfully!")
-        print("\n📖 Next steps:")
+        print("\nAblation study completed successfully!")
+        print("\nNext steps:")
         print("   1. Check the results directory for output files")
         print("   2. Review the WandB dashboard for detailed metrics")
         print("   3. Use the generated CSV/LaTeX files for publication")
     else:
-        print("\n💥 Ablation study failed - check the error messages above")
+        print("\nAblation study failed - check the error messages above")
         sys.exit(1)
 
 if __name__ == "__main__":
