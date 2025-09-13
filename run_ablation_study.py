@@ -72,7 +72,7 @@ def run_ablation_study(config, enabled_experiments):
         # Pass the full config to the ablation study for experiment selection
         ablation.config = config
         ablation.enabled_experiments = enabled_experiments
-        ablation.random_seeds = config.get('random_seeds', [42])
+        ablation.random_seeds = config.get('random_seeds', [42, 123, 456])
         
         # Run the study
         results = ablation.run_publication_ablation()
