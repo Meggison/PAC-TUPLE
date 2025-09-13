@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Runner script for publication-level PAC-Bayes ablation studies.
+Runner script for PAC-Bayes ablation studies.
 
 This script provides a convenient interface to run different types of ablation studies
 with proper configuration management and WandB integration.
@@ -52,7 +52,7 @@ def run_ablation_study(config, enabled_experiments):
     """Run the ablation study with the given configuration"""
     try:
         # Import here to avoid circular imports
-        from scripts.publication_level_ablation import PublicationLevelPACBayesAblation
+        from scripts.publication_level_ablation import PACBayesAblation
         
         print("🔬 Starting Publication-Level PAC-Bayes Ablation Study")
         print("="*60)
@@ -63,7 +63,7 @@ def run_ablation_study(config, enabled_experiments):
         use_wandb = wandb_settings.get('use_wandb', True)
         wandb_project = wandb_settings.get('project', 'pac-bayes-ablation')
         
-        ablation = PublicationLevelPACBayesAblation(
+        ablation = PACBayesAblation(
             base_config=base_config,
             use_wandb=use_wandb,
             wandb_project=wandb_project
@@ -78,11 +78,11 @@ def run_ablation_study(config, enabled_experiments):
         results = ablation.run_publication_ablation()
         
         print("\n✅ Ablation study completed successfully!")
-        print(f"📊 Results saved to: {results.get('output_directory', 'publication_ablation_results')}")
+        print(f"Results saved to: {results.get('output_directory', 'publication_ablation_results')}")
         
         # Print summary
         if 'summary' in results:
-            print("\n📈 Results Summary:")
+            print("\nResults Summary:")
             for key, value in results['summary'].items():
                 print(f"   {key}: {value}")
         
@@ -90,7 +90,7 @@ def run_ablation_study(config, enabled_experiments):
         
     except Exception as e:
         print(f"\n❌ Error during ablation study: {str(e)}")
-        print("\n🔍 Full traceback:")
+        print("\nFull traceback:")
         traceback.print_exc()
         return None
 

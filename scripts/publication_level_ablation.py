@@ -25,11 +25,12 @@ sys.path.append(project_root)
 from utils.train_util import runexp_with_structured_output, validate_experiment_config, setup_ablation_environment
 from utils.wandb_logger import WandbLogger
 
-class PublicationLevelPACBayesAblation:
+class PACBayesAblation:
     def __init__(self, base_config, results_dir="publication_ablation_results", use_wandb=True, wandb_project="pac-bayes-ablation"):
         self.base_config = base_config
         self.results_dir = setup_ablation_environment(results_dir)
         self.results = []
+        self.all_results = {}
         
         # WandB Integration
         self.use_wandb = use_wandb
@@ -120,6 +121,16 @@ class PublicationLevelPACBayesAblation:
         
         # Get enabled experiments from the configuration
         enabled_experiments = getattr(self, 'enabled_experiments', ['ntuple_sizes'])
+
+        # create file for all results
+        self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.results_json_file = f"{self.results_dir}/all_ablation_results.json_{self.timestamp}"
+        self.results_csv_file = f"{self.results_dir}/all_ablation_results.csv_{self.timestamp}"
+
+        with open(self.results_json_file, 'w') as f:
+            json.dump({}, f)  # Initialize empty JSON
+        
+        pd.DataFrame().to_csv(self.results_csv_file, index=False)  # Initialize empty CSV
         
         self.log(f"Enabled experiments: {enabled_experiments}")
         self.log(f"Using random seeds: {getattr(self, 'random_seeds', [42])}")
@@ -239,7 +250,7 @@ class PublicationLevelPACBayesAblation:
         return all_results
     
     def ntuple_size_ablation(self):
-        """🆕 NEW: Test different N-tuple sizes (3-6) with WandB tracking"""
+        """Test different N-tuple sizes (3-6) with WandB tracking"""
         ntuple_sizes = [3, 4, 5, 6]  # Your requested range
         results = []
         
@@ -261,18 +272,17 @@ class PublicationLevelPACBayesAblation:
                     'learning_rate': 0.005,
                     'train_epochs': 30,    # Increased for final results
                     'mc_samples': 1000,     # Increased for better estimates
-                    'use_wandb': False,    # Disable individual experiment wandb logging
+                    'use_wandb': True,    # Disable individual experiment wandb logging
                 })
                 
                 # Initialize WandB for this specific experiment
                 self.init_wandb_for_experiment("ntuple_size", config)
-                
                 self.log(f"  N={N}, seed={seed} ({seed_idx+1}/{len(self.random_seeds)})")
                 result = self.run_single_experiment(config)
                 
                 if result.get('status') == 'success':
                     result.update({'N': N, 'seed': seed, 'experiment_type': 'ntuple_size'})
-                    self.log(f"    ✓ N={N} seed={seed}: Risk={result.get('risk_ntuple', 'N/A'):.4f}, Acc={result.get('stch_accuracy', 'N/A'):.4f}")
+                    self.log(f"✓ N={N} seed={seed}: Risk={result.get('risk_ntuple', 'N/A'):.4f}, Acc={result.get('stch_accuracy', 'N/A'):.4f}")
                     
                     # Log to WandB
                     self.log_ablation_metrics({
@@ -291,6 +301,9 @@ class PublicationLevelPACBayesAblation:
                 # Finish this WandB run
                 if self.wandb_logger:
                     self.wandb_logger.finish()
+                
+                # save intermediate results
+                self.save_publication_results({'ntuple_sizes': results})
         
         return results
     
@@ -340,6 +353,9 @@ class PublicationLevelPACBayesAblation:
                 # Finish this WandB run
                 if self.wandb_logger:
                     self.wandb_logger.finish()
+
+                # save intermediate results
+                self.save_publication_results({'objectives': results})
         
         return results
     
@@ -410,6 +426,9 @@ class PublicationLevelPACBayesAblation:
                 # Finish this WandB run
                 if self.wandb_logger:
                     self.wandb_logger.finish()
+                
+                # save intermediate results
+                self.save_publication_results({'winning_hyperparams': results})
         
         return results
     
@@ -461,6 +480,9 @@ class PublicationLevelPACBayesAblation:
                 # Finish this WandB run
                 if self.wandb_logger:
                     self.wandb_logger.finish()
+
+                # save intermediate results
+                self.save_publication_results({'architectures': results})
         
         return results
     
@@ -513,6 +535,9 @@ class PublicationLevelPACBayesAblation:
                 # Finish this WandB run
                 if self.wandb_logger:
                     self.wandb_logger.finish()
+
+                # save intermediate results
+                self.save_publication_results({'priors': results})
         
         return results
     
@@ -573,11 +598,16 @@ class PublicationLevelPACBayesAblation:
             }
     
     def save_publication_results(self, results):
-        """Save results in publication-ready format"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+        """Save results in publication-ready format"""        
         # Save comprehensive JSON
-        results_file = f"{self.results_dir}/data/publication_results_{timestamp}.json"
+        results_file = getattr(self, 'results_json_file', None)
+        csv_file = getattr(self, 'results_csv_file', None)
+
+        if not results_file or not csv_file:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            results_file = f"{self.results_dir}/all_ablation_results.json_{timestamp}"
+            csv_file = f"{self.results_dir}/all_ablation_results.csv_{timestamp}"
+
         with open(results_file, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         
@@ -858,7 +888,7 @@ if __name__ == "__main__":
     publication_base_config = get_publication_base_config()
     
     # Initialize ablation study with WandB
-    ablation = PublicationLevelPACBayesAblation(
+    ablation = PACBayesAblation(
         publication_base_config, 
         results_dir="publication_ablation_results",
         use_wandb=True,
