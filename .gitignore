@@ -51,3 +51,7 @@ data/cifar-10-batches-py/
 
 # research papers
 research/papers/*.pdf
+
+# wandb tracking files
+wandb/
+logs/
