@@ -110,5 +110,3 @@ python run_config_experiment.py --override wandb.enabled=true
 # Extended training run
 python run_config_experiment.py --experiment extended --override wandb.enabled=true
 ```
-
-Clean, simple, and focused on your standard training workflow! 🎯
