@@ -54,7 +54,7 @@ def run_ablation_study(config, enabled_experiments):
         # Import here to avoid circular imports
         from scripts.publication_level_ablation import PACBayesAblation
         
-        print("🔬 Starting Publication-Level PAC-Bayes Ablation Study")
+        print("Starting Publication-Level PAC-Bayes Ablation Study")
         print("="*60)
         
         # Initialize the ablation study
