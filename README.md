@@ -320,10 +320,6 @@ python experiment.py --config custom_config.yaml
 3. Dziugaite, G. K. & Roy, D. M. (2017). Computing nonvacuous generalization bounds for deep networks. *UAI 2017*
 
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgments
 
 - University of Birmingham Computer Science Department
