@@ -157,8 +157,6 @@ training:
 
 Comprehensive experiment tracking with automatic logging:
 
-![WandB Dashboard](research/papers/visualisations/18.png)
-
 Setup experiment tracking:
 
 1. Configure `.env`:
@@ -222,8 +220,6 @@ Setup experiment tracking:
 - 4-layer CNN: Fast, good baseline performance
 - 9-layer CNN: Optimal accuracy-efficiency balance  
 - 13/15-layer: Marginal gains, increased complexity
-
-![Architecture Comparison](research/papers/visualisations/12.png)
 
 ## Project Structure
 
