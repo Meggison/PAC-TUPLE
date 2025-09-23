@@ -25,8 +25,6 @@ Our PAC-Bayes approach demonstrates competitive performance while providing theo
 |---------|--------|---------|-------------|-----------------|
 | CIFAR-10 | Deterministic Baseline | 67.3 | 78.4 | - |
 | CIFAR-10 | **PAC-Bayes (Ours)** | **69.8** | **80.1** | **0.032** |
-| CUHK03 | Deterministic Baseline | 45.2 | 58.7 | - |
-| CUHK03 | **PAC-Bayes (Ours)** | **47.6** | **61.3** | **0.028** |
 
 *Results show mean ± std over 5 random seeds*
 
