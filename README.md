@@ -312,13 +312,6 @@ python experiment.py --override experiment.debug_mode=true
 python experiment.py --config custom_config.yaml
 ```
 
-## Publications & References
-
-This work is based on the following research:
-
-- **[Main Paper]**: "PAC-Bayes N-tuple Metric Learning for Person Re-identification" 
-- **Conference**: [Conference Name, Year]
-- **Authors**: [Author List]
 
 ### Key References
 
@@ -326,15 +319,6 @@ This work is based on the following research:
 2. Langford, J. & Caruana, R. (2002). (Not) bounding the true error. *NIPS 2002*  
 3. Dziugaite, G. K. & Roy, D. M. (2017). Computing nonvacuous generalization bounds for deep networks. *UAI 2017*
 
-## Contributing
-
-We welcome contributions! Please see our contributing guidelines:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## License
 
@@ -343,5 +327,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - University of Birmingham Computer Science Department
-- EPSRC for funding support
-- The PAC-Bayes research community
