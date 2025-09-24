@@ -92,8 +92,6 @@ Where:
 
 ### N-Tuple Learning Architecture
 
-![N-Tuple Architecture](research/papers/visualisations/7.png)
-
 The framework supports flexible N-tuple configurations:
 - **Anchor**: Query image
 - **Positive**: Same identity as anchor  
