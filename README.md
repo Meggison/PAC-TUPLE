@@ -186,8 +186,6 @@ Setup experiment tracking:
 - Risk vs. bound trajectories
 - Parameter distribution evolution
 
-![Risk Bounds](research/papers/visualisations/14.png)
-
 ## Ablation Studies & Analysis
 
 ### Available Experiment Presets
