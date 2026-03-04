@@ -18,7 +18,6 @@ Where:
 - **Theoretical Foundation**: PAC-Bayes bounds providing high-probability generalization guarantees
 - **N-tuple Architecture**: Flexible tuple-based learning supporting arbitrary negative sampling
 - **Stochastic Networks**: Probabilistic neural networks with Bayesian posterior inference  
-- **Comprehensive Evaluation**: Extensive ablation studies across architectures and hyperparameters
 
 ## Results & Performance
 
